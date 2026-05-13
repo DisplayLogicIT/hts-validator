@@ -1,6 +1,6 @@
 // USITC HTS public API — no key required.
-// Correct endpoint: https://hts.usitc.gov/reststop/search?keyword=<query>
-// Discovered by inspecting the Angular app bundle (apiBaseUrl config).
+// Endpoint: https://hts.usitc.gov/reststop/search?keyword=<query>
+// The API does loose OR matching across all words, so we post-filter by relevance.
 const BASE = 'https://hts.usitc.gov/reststop'
 
 export interface HtsResult {
@@ -26,13 +26,21 @@ export async function searchHts(query: string): Promise<HtsResult[]> {
 
   const items = (await res.json()) as Record<string, unknown>[]
 
+  // Post-filter: description must contain at least one meaningful query word.
+  // The API does loose OR matching so multi-word queries return unrelated results.
+  const queryWords = query
+    .toLowerCase()
+    .split(/[\s,+]+/)
+    .filter((w) => w.length > 3)
+
   return items
     .filter((item) => {
       const code = String(item.htsno ?? '')
-      // Only include specific product entries — full codes contain dots (e.g. 8544.42.90.00)
-      return code.includes('.') && code.length >= 7
+      if (!code.includes('.') || code.length < 7) return false
+      const desc = stripHtml(String(item.description ?? '')).toLowerCase()
+      return queryWords.length === 0 || queryWords.some((w) => desc.includes(w))
     })
-    .slice(0, 20)
+    .slice(0, 15)
     .map((item) => {
       const code = String(item.htsno ?? '')
       const description = stripHtml(String(item.description ?? ''))

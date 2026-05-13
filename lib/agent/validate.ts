@@ -15,21 +15,23 @@ export interface ValidationResult {
 const SYSTEM_PROMPT = `You are an expert in USITC Harmonized Tariff Schedule (HTS) classification for defense and commercial parts.
 
 Your job:
-1. Call the search_hts tool with relevant keywords from the user's part number or description.
-2. Review the results and select the MOST SPECIFIC matching HTS code.
-3. Return a JSON object with: hts_code, hts_description, confidence_score (0.0-1.0), duty_rate, source_url, and reasoning.
+1. Call search_hts with a SHORT, SPECIFIC product-type keyword (1-3 words max). Do NOT use part numbers, do NOT use adjectives like "aluminum" or "mil-spec" on the first search.
+   Good: "connector", "washer", "relay", "capacitor", "gasket", "clamp"
+   Bad: "MIL-C-5015 circular connector aluminum shell", "corrosion resistant flat washer"
+2. Review the results. If too many or no good match, refine with a second search using a more specific product term.
+3. Select the MOST SPECIFIC matching HTS code from the results.
+4. Return a JSON object with: hts_code, hts_description, confidence_score (0.0-1.0), duty_rate, source_url, reasoning.
 
 Rules:
 - NEVER invent or assume an HTS code. Only use codes returned by search_hts.
-- If search results are ambiguous, call search_hts again with more specific terms.
-- Prefer results with full 10-digit HTS codes (e.g. 8544.42.90.00) over partial codes.
-- If no good match exists, return confidence_score below 0.5 and explain why in reasoning.
+- Prefer full 10-digit codes (e.g. 8536.69.40.30) over partial codes.
+- If no good match exists, return confidence_score below 0.5 and explain in reasoning.
 - confidence_score: 0.9+ = exact match, 0.7–0.9 = strong match, 0.5–0.7 = possible match, <0.5 = poor match.
-- duty_rate: copy the general duty rate string from the matching search result (e.g. "Free", "2.6%"). Use null if not available.`
+- duty_rate: copy the general duty rate string from the matching result (e.g. "Free", "2.6%"). Use null if unavailable.`
 
 export async function runHtsAgent(query: string): Promise<ValidationResult> {
   const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: `Classify this part: ${query}` },
+    { role: 'user', content: `Classify this part for HTS purposes: ${query}` },
   ]
 
   for (let turn = 0; turn < 5; turn++) {
@@ -40,13 +42,14 @@ export async function runHtsAgent(query: string): Promise<ValidationResult> {
       tools: [
         {
           name: 'search_hts',
-          description: 'Search the USITC Harmonized Tariff Schedule by keyword. Returns matching HTS codes, descriptions, and duty rates.',
+          description:
+            'Search the USITC HTS schedule by product keyword. Use short specific product-type words (connector, washer, relay). Returns matching HTS codes, descriptions, and duty rates.',
           input_schema: {
             type: 'object' as const,
             properties: {
               query: {
                 type: 'string',
-                description: 'Keywords describing the product (e.g. "circular electrical connector aluminum"). Use product type terms, not part numbers.',
+                description: 'Short product-type keyword(s), 1-3 words. Example: "connector" or "flat washer" or "circuit breaker".',
               },
             },
             required: ['query'],
@@ -96,7 +99,7 @@ export async function runHtsAgent(query: string): Promise<ValidationResult> {
           content:
             results.length > 0
               ? JSON.stringify(results)
-              : 'No results found. Try different search terms — use product type keywords, not part numbers.',
+              : 'No relevant results. Try a different single product-type keyword.',
         }
       }),
     )
