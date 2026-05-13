@@ -86,10 +86,10 @@ export function UploadForm() {
       })
     } else {
       // Dynamic import avoids Turbopack browser crash (xlsx uses Node.js built-ins at init).
-      // Use mod.default ?? mod to handle CJS-in-ESM interop correctly.
+      // Cast via unknown first — TS rejects direct cast because types don't sufficiently overlap.
       import('xlsx')
         .then((mod) => {
-          const XLSX = (mod as { default?: typeof mod }).default ?? mod
+          const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
           const reader = new FileReader()
           reader.onload = (e) => {
             try {
@@ -182,7 +182,7 @@ export function UploadForm() {
 
   async function downloadResults() {
     const mod = await import('xlsx')
-    const XLSX = (mod as { default?: typeof mod }).default ?? mod
+    const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
     const wsData = results.map((r) => ({
       'Part Number': r.partNumber,
       'HTS Code': r.htsCode ?? '',
