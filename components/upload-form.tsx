@@ -3,6 +3,8 @@
 import { useState, useRef } from 'react'
 import Papa from 'papaparse'
 
+const CONCURRENCY = 8
+
 interface ParsedRow {
   partNumber: string
   description: string
@@ -127,7 +129,6 @@ export function UploadForm() {
   }
 
   function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
-    // Only reset when leaving the outer container, not when moving between children
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setIsDragOver(false)
     }
@@ -136,7 +137,7 @@ export function UploadForm() {
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (file) parseFile(file)
-    e.target.value = '' // allow re-selecting same file
+    e.target.value = ''
   }
 
   async function startClassification() {
@@ -150,33 +151,63 @@ export function UploadForm() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_name: detection.fileName, row_count: rows.length }),
     })
-    const { id: jobId } = (await jobRes.json()) as { id: string }
-    const accumulated: ClassificationResult[] = []
+    const jobJson = (await jobRes.json()) as { id?: string; error?: string }
+    const jobId = jobJson.id ?? null
 
-    for (let i = 0; i < rows.length; i++) {
+    // Shared mutable state for concurrent workers (JS single-thread: safe across await boundaries)
+    const accumulated: (ClassificationResult | null)[] = Array(rows.length).fill(null)
+    let doneCount = 0
+    let nextIdx = 0
+
+    async function classifyRow(i: number) {
       const row = rows[i]
       const query = row.description ? `${row.partNumber} ${row.description}` : row.partNumber
       try {
         const res = await fetch('/api/validate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, job_id: jobId, row_index: i }),
+          body: JSON.stringify({ query, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
         })
         const data = (await res.json()) as { hts_code?: string; confidence_score?: number; error?: string }
         const pct = data.confidence_score != null ? Math.round(data.confidence_score * 100) : null
-        accumulated.push({ rowIndex: i, partNumber: row.partNumber, htsCode: data.hts_code ?? null, confidence: pct, status: res.ok ? 'done' : 'error', error: res.ok ? undefined : (data.error ?? 'Unknown error') })
+        accumulated[i] = {
+          rowIndex: i,
+          partNumber: row.partNumber,
+          htsCode: data.hts_code ?? null,
+          confidence: pct,
+          status: res.ok ? 'done' : 'error',
+          error: res.ok ? undefined : (data.error ?? 'Unknown error'),
+        }
       } catch {
-        accumulated.push({ rowIndex: i, partNumber: row.partNumber, htsCode: null, confidence: null, status: 'error', error: 'Network error' })
+        accumulated[i] = {
+          rowIndex: i,
+          partNumber: row.partNumber,
+          htsCode: null,
+          confidence: null,
+          status: 'error',
+          error: 'Network error',
+        }
       }
-      setResults([...accumulated])
-      setProgress({ done: i + 1, total: rows.length })
+      doneCount++
+      setProgress({ done: doneCount, total: rows.length })
+      setResults(accumulated.filter((r): r is ClassificationResult => r !== null))
     }
 
-    await fetch(`/api/jobs/${jobId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
-    })
+    async function worker() {
+      while (nextIdx < rows.length) {
+        await classifyRow(nextIdx++)
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker))
+
+    if (jobId) {
+      await fetch(`/api/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
+      })
+    }
     setUploadState('complete')
   }
 
@@ -277,7 +308,7 @@ export function UploadForm() {
               <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-blue-700 to-blue-400 rounded-full transition-all duration-300" style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }} />
               </div>
-              <p className="text-[9px] text-slate-400 mt-1.5">Do not close this tab</p>
+              <p className="text-[9px] text-slate-400 mt-1.5">Processing {CONCURRENCY} rows at a time · Do not close this tab</p>
             </div>
           )}
 
