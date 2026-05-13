@@ -1,8 +1,11 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
-import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
+
+// xlsx is dynamically imported inside parseFile/downloadResults.
+// Static import of xlsx causes a runtime crash in Turbopack browser bundles
+// because xlsx references Node.js built-ins (crypto, fs, stream) at init time.
 
 interface ParsedRow {
   partNumber: string
@@ -53,6 +56,7 @@ export function UploadForm() {
   const [rows, setRows] = useState<ParsedRow[]>([])
   const [detection, setDetection] = useState<DetectionInfo | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [parseError, setParseError] = useState<string | null>(null)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [results, setResults] = useState<ClassificationResult[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
@@ -62,7 +66,10 @@ export function UploadForm() {
     headers: string[],
     fileName: string,
   ) {
-    if (data.length === 0) return
+    if (data.length === 0) {
+      setParseError('No rows found in file. Make sure the file has a header row and data rows.')
+      return
+    }
     const { partIdx, descIdx } = detectColumns(headers)
     const partCol = headers[partIdx]
     const descCol = descIdx !== null ? headers[descIdx] : null
@@ -74,13 +81,20 @@ export function UploadForm() {
       }))
       .filter((r) => r.partNumber.length > 0)
 
+    if (parsed.length === 0) {
+      setParseError('No part numbers found. Check that column headers include "Part", "NSN", or "P/N".')
+      return
+    }
+
     setRows(parsed)
     setDetection({ partCol, descCol, fileName, totalRows: parsed.length })
     setUploadState('parsed')
   }
 
   function parseFile(file: File) {
+    setParseError(null)
     const ext = file.name.split('.').pop()?.toLowerCase()
+
     if (ext === 'csv') {
       Papa.parse<Record<string, string>>(file, {
         header: true,
@@ -89,27 +103,48 @@ export function UploadForm() {
           const headers = result.meta.fields ?? []
           processRawRows(result.data, headers, file.name)
         },
+        error: (err) => {
+          setParseError(`Could not read CSV: ${err.message}`)
+        },
       })
     } else {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        const wb = XLSX.read(e.target?.result, { type: 'array' })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const data = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
-        const headers = data.length > 0 ? Object.keys(data[0]) : []
-        processRawRows(data, headers, file.name)
-      }
-      reader.readAsArrayBuffer(file)
+      // Dynamically import xlsx to avoid Turbopack browser bundle crash
+      import('xlsx')
+        .then((XLSX) => {
+          const reader = new FileReader()
+          reader.onload = (e) => {
+            try {
+              const wb = XLSX.read(e.target?.result, { type: 'array' })
+              const ws = wb.Sheets[wb.SheetNames[0]]
+              const data = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
+              const headers = data.length > 0 ? Object.keys(data[0]) : []
+              processRawRows(data, headers, file.name)
+            } catch (err) {
+              console.error('XLSX parse error:', err)
+              setParseError('Could not read XLSX file. Try saving it as CSV and uploading that instead.')
+            }
+          }
+          reader.onerror = () => setParseError('File read failed. Try again.')
+          reader.readAsArrayBuffer(file)
+        })
+        .catch((err) => {
+          console.error('xlsx import error:', err)
+          setParseError('XLSX parser failed to load. Please upload a CSV file instead.')
+        })
     }
   }
 
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    setIsDragOver(false)
-    const file = e.dataTransfer.files[0]
-    if (file) parseFile(file)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      setIsDragOver(false)
+      const file = e.dataTransfer.files[0]
+      if (file) parseFile(file)
+    },
+    // parseFile only calls stable setters + Papa/xlsx — safe to omit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -121,6 +156,8 @@ export function UploadForm() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) parseFile(file)
+    // Reset so the same file can be re-selected
+    e.target.value = ''
   }
 
   async function startClassification() {
@@ -132,10 +169,7 @@ export function UploadForm() {
     const jobRes = await fetch('/api/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_name: detection.fileName,
-        row_count: rows.length,
-      }),
+      body: JSON.stringify({ file_name: detection.fileName, row_count: rows.length }),
     })
     const { id: jobId } = (await jobRes.json()) as { id: string }
 
@@ -143,9 +177,7 @@ export function UploadForm() {
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
-      const query = row.description
-        ? `${row.partNumber} ${row.description}`
-        : row.partNumber
+      const query = row.description ? `${row.partNumber} ${row.description}` : row.partNumber
 
       try {
         const res = await fetch('/api/validate', {
@@ -158,10 +190,7 @@ export function UploadForm() {
           confidence_score?: number
           error?: string
         }
-
-        const pct =
-          data.confidence_score != null ? Math.round(data.confidence_score * 100) : null
-
+        const pct = data.confidence_score != null ? Math.round(data.confidence_score * 100) : null
         accumulated.push({
           rowIndex: i,
           partNumber: row.partNumber,
@@ -194,7 +223,8 @@ export function UploadForm() {
     setUploadState('complete')
   }
 
-  function downloadResults() {
+  async function downloadResults() {
+    const XLSX = await import('xlsx')
     const wsData = results.map((r) => ({
       'Part Number': r.partNumber,
       'HTS Code': r.htsCode ?? '',
@@ -219,6 +249,7 @@ export function UploadForm() {
     setRows([])
     setDetection(null)
     setResults([])
+    setParseError(null)
   }
 
   return (
@@ -226,43 +257,48 @@ export function UploadForm() {
 
       {/* State 1: Idle drop zone */}
       {uploadState === 'idle' && (
-        <div
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onClick={() => inputRef.current?.click()}
-          className={[
-            'border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors',
-            isDragOver
-              ? 'border-blue-400 bg-blue-50'
-              : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50',
-          ].join(' ')}
-        >
-          <svg
-            className={`w-10 h-10 ${isDragOver ? 'text-blue-400' : 'text-slate-300'}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
+        <>
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onClick={() => inputRef.current?.click()}
+            className={[
+              'border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors',
+              isDragOver
+                ? 'border-blue-400 bg-blue-50'
+                : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50',
+            ].join(' ')}
           >
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-          <div className="text-center">
-            <p className="text-sm font-semibold text-slate-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-              Drop XLSX or CSV here
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">or click to browse · max 10 MB</p>
+            <svg
+              className={`w-10 h-10 ${isDragOver ? 'text-blue-400' : 'text-slate-300'}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <div className="text-center">
+              <p className="text-sm font-semibold text-slate-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>
+                Drop XLSX or CSV here
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">or click to browse · max 10 MB</p>
+            </div>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleFileInput}
+            />
           </div>
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={handleFileInput}
-          />
-        </div>
+
+          {parseError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-[11px] text-red-700">
+              {parseError}
+            </div>
+          )}
+        </>
       )}
 
       {/* States 2–4: File loaded */}
@@ -286,10 +322,7 @@ export function UploadForm() {
               </p>
             </div>
             {uploadState === 'parsed' && (
-              <button
-                onClick={reset}
-                className="text-[10px] text-slate-400 hover:text-slate-600 underline shrink-0"
-              >
+              <button onClick={reset} className="text-[10px] text-slate-400 hover:text-slate-600 underline shrink-0">
                 Replace
               </button>
             )}
@@ -299,9 +332,7 @@ export function UploadForm() {
           {uploadState === 'parsed' && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-3 items-start">
               <svg className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
+                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <p className="text-[10.5px] text-blue-800 leading-relaxed">
                 Agent detected <strong>Part Number</strong> in column &ldquo;{detection.partCol}&rdquo;
@@ -353,7 +384,7 @@ export function UploadForm() {
           {/* Preview table */}
           {uploadState === 'parsed' && (
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-              <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex justify-between items-center">
+              <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5">
                 <span className="text-[10px] font-semibold text-slate-700">
                   Preview — first {Math.min(10, rows.length)} of {rows.length} rows
                 </span>
@@ -372,10 +403,7 @@ export function UploadForm() {
                   {rows.slice(0, 10).map((row, i) => (
                     <tr key={i} className="border-t border-slate-100">
                       <td className="text-[10px] text-slate-400 px-4 py-2">{i + 1}</td>
-                      <td
-                        className="text-[10px] text-blue-800 px-4 py-2 font-medium"
-                        style={{ fontFamily: 'var(--font-plex-mono)' }}
-                      >
+                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>
                         {row.partNumber}
                       </td>
                       {detection.descCol && (
@@ -411,16 +439,10 @@ export function UploadForm() {
                 <tbody>
                   {results.map((r) => (
                     <tr key={r.rowIndex} className="border-t border-slate-100">
-                      <td
-                        className="text-[10px] text-blue-800 px-4 py-2 font-medium"
-                        style={{ fontFamily: 'var(--font-plex-mono)' }}
-                      >
+                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>
                         {r.partNumber}
                       </td>
-                      <td
-                        className="text-[10px] text-slate-800 px-4 py-2 font-medium"
-                        style={{ fontFamily: 'var(--font-plex-mono)' }}
-                      >
+                      <td className="text-[10px] text-slate-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>
                         {r.htsCode ?? '—'}
                       </td>
                       <td className="text-[10px] font-semibold px-4 py-2" style={{ color: confColor(r.confidence) }}>
@@ -456,10 +478,7 @@ export function UploadForm() {
 
           {/* Upload another */}
           {uploadState === 'complete' && (
-            <button
-              onClick={reset}
-              className="text-[11px] text-slate-500 hover:text-slate-700 underline text-center w-full"
-            >
+            <button onClick={reset} className="text-[11px] text-slate-500 hover:text-slate-700 underline text-center w-full">
               Upload another file
             </button>
           )}
