@@ -1,9 +1,16 @@
 // USITC HTS public API — no key required.
 // Endpoint: https://hts.usitc.gov/reststop/search?keyword=<query>
-// The API does loose OR matching across all words, so we post-filter by relevance.
 const BASE = 'https://hts.usitc.gov/reststop'
 
 export interface HtsResult {
+  hts_code: string
+  description: string
+  duty_rate: string | null
+  source_url: string
+}
+
+export interface HtsLookupResult {
+  valid: boolean
   hts_code: string
   description: string
   duty_rate: string | null
@@ -14,24 +21,20 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
 }
 
+function normalizeCode(code: string): string {
+  return code.replace(/[.\s-]/g, '').toLowerCase()
+}
+
+// Used by the single Lookup page — AI agent searches by product keyword
 export async function searchHts(query: string): Promise<HtsResult[]> {
   const params = new URLSearchParams({ keyword: query })
   const res = await fetch(`${BASE}/search?${params}`, {
     headers: { Accept: 'application/json' },
   })
-
-  if (!res.ok) {
-    throw new Error(`USITC API responded with ${res.status} ${res.statusText}`)
-  }
+  if (!res.ok) throw new Error(`USITC API responded with ${res.status} ${res.statusText}`)
 
   const items = (await res.json()) as Record<string, unknown>[]
-
-  // Post-filter: description must contain at least one meaningful query word.
-  // The API does loose OR matching so multi-word queries return unrelated results.
-  const queryWords = query
-    .toLowerCase()
-    .split(/[\s,+]+/)
-    .filter((w) => w.length > 3)
+  const queryWords = query.toLowerCase().split(/[\s,+]+/).filter((w) => w.length > 3)
 
   return items
     .filter((item) => {
@@ -41,16 +44,41 @@ export async function searchHts(query: string): Promise<HtsResult[]> {
       return queryWords.length === 0 || queryWords.some((w) => desc.includes(w))
     })
     .slice(0, 15)
-    .map((item) => {
-      const code = String(item.htsno ?? '')
-      const description = stripHtml(String(item.description ?? ''))
-      const dutyRate = item.general ? String(item.general) : null
-      return {
-        hts_code: code,
-        description,
-        duty_rate: dutyRate,
-        source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(code)}`,
-      }
-    })
+    .map((item) => ({
+      hts_code: String(item.htsno ?? ''),
+      description: stripHtml(String(item.description ?? '')),
+      duty_rate: item.general ? String(item.general) : null,
+      source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(String(item.htsno ?? ''))}`,
+    }))
     .filter((r) => r.description.length > 0)
+}
+
+// Used by the batch Upload page — validates an HTS code directly against USITC
+export async function lookupHtsCode(htsCode: string): Promise<HtsLookupResult> {
+  const cleaned = htsCode.trim()
+  const params = new URLSearchParams({ keyword: cleaned })
+  const res = await fetch(`${BASE}/search?${params}`, {
+    headers: { Accept: 'application/json' },
+  })
+  if (!res.ok) throw new Error(`USITC API error: ${res.status}`)
+
+  const items = (await res.json()) as Record<string, unknown>[]
+  const normalizedInput = normalizeCode(cleaned)
+
+  const match = items.find((item) => {
+    const code = normalizeCode(String(item.htsno ?? ''))
+    return code === normalizedInput
+  })
+
+  if (!match) {
+    return { valid: false, hts_code: cleaned, description: '', duty_rate: null, source_url: '' }
+  }
+
+  return {
+    valid: true,
+    hts_code: String(match.htsno ?? cleaned),
+    description: stripHtml(String(match.description ?? '')),
+    duty_rate: match.general ? String(match.general) : null,
+    source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(String(match.htsno ?? ''))}`,
+  }
 }

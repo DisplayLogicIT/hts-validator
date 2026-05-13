@@ -3,44 +3,41 @@
 import { useState, useRef } from 'react'
 import Papa from 'papaparse'
 
-const CONCURRENCY = 8
+const CONCURRENCY = 20
 
 interface ParsedRow {
-  partNumber: string
-  description: string
+  htsCode: string
+  label: string // part number or other reference column, shown in output
 }
 
 interface DetectionInfo {
-  partCol: string
-  descCol: string | null
+  htsCol: string
+  labelCol: string | null
   fileName: string
   totalRows: number
 }
 
-interface ClassificationResult {
+interface ValidationResult {
   rowIndex: number
-  partNumber: string
-  htsCode: string | null
-  confidence: number | null
+  htsCode: string
+  label: string
+  description: string
+  dutyRate: string | null
+  valid: boolean
   status: 'done' | 'error'
   error?: string
 }
 
 type UploadState = 'idle' | 'parsed' | 'classifying' | 'complete'
 
-function detectColumns(headers: string[]): { partIdx: number; descIdx: number | null } {
-  const partKeywords = ['part', 'nsn', 'pn', 'p/n', 'part_no', 'part_number', 'partnumber']
-  const descKeywords = ['desc', 'description', 'name', 'item']
+function detectColumns(headers: string[]): { htsIdx: number; labelIdx: number | null } {
+  const htsKeywords = ['hts', 'tariff', 'harmonized', 'htsus', 'hs']
+  const labelKeywords = ['part', 'nsn', 'pn', 'p/n', 'description', 'desc', 'item', 'name', 'product']
   const h = headers.map((s) => s.toLowerCase().trim())
-  const partIdxFound = h.findIndex((c) => partKeywords.some((k) => c.includes(k)))
-  const partIdx = partIdxFound === -1 ? 0 : partIdxFound
-  const descIdxFound = h.findIndex(
-    (c, i) => i !== partIdx && descKeywords.some((k) => c.includes(k)),
-  )
-  let descIdx: number | null = null
-  if (descIdxFound !== -1) descIdx = descIdxFound
-  else if (headers.length > 1) descIdx = partIdx === 0 ? 1 : 0
-  return { partIdx, descIdx }
+  const htsIdxFound = h.findIndex((c) => htsKeywords.some((k) => c.includes(k)))
+  const htsIdx = htsIdxFound === -1 ? 0 : htsIdxFound
+  const labelIdxFound = h.findIndex((c, i) => i !== htsIdx && labelKeywords.some((k) => c.includes(k)))
+  return { htsIdx, labelIdx: labelIdxFound === -1 ? null : labelIdxFound }
 }
 
 export function UploadForm() {
@@ -50,7 +47,7 @@ export function UploadForm() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
-  const [results, setResults] = useState<ClassificationResult[]>([])
+  const [results, setResults] = useState<ValidationResult[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
   function processRawRows(data: Record<string, string>[], headers: string[], fileName: string) {
@@ -58,21 +55,21 @@ export function UploadForm() {
       setParseError('No rows found. Make sure the file has a header row and data rows.')
       return
     }
-    const { partIdx, descIdx } = detectColumns(headers)
-    const partCol = headers[partIdx]
-    const descCol = descIdx !== null ? headers[descIdx] : null
+    const { htsIdx, labelIdx } = detectColumns(headers)
+    const htsCol = headers[htsIdx]
+    const labelCol = labelIdx !== null ? headers[labelIdx] : null
     const parsed: ParsedRow[] = data
       .map((row) => ({
-        partNumber: String(row[partCol] ?? '').trim(),
-        description: descCol ? String(row[descCol] ?? '').trim() : '',
+        htsCode: String(row[htsCol] ?? '').trim(),
+        label: labelCol ? String(row[labelCol] ?? '').trim() : '',
       }))
-      .filter((r) => r.partNumber.length > 0)
+      .filter((r) => r.htsCode.length > 0)
     if (parsed.length === 0) {
-      setParseError(`No part numbers found in column "${partCol}". Check that the file has a header row with a column named Part, NSN, or P/N.`)
+      setParseError(`No HTS codes found in column "${htsCol}". Make sure the file has a header row with a column named HTS, Tariff, or HTSUS.`)
       return
     }
     setRows(parsed)
-    setDetection({ partCol, descCol, fileName, totalRows: parsed.length })
+    setDetection({ htsCol, labelCol, fileName, totalRows: parsed.length })
     setUploadState('parsed')
   }
 
@@ -87,8 +84,6 @@ export function UploadForm() {
         error: (err) => setParseError(`CSV error: ${err.message}`),
       })
     } else {
-      // Dynamic import avoids Turbopack browser crash (xlsx uses Node.js built-ins at init).
-      // Cast via unknown first — TS rejects direct cast because types don't sufficiently overlap.
       import('xlsx')
         .then((mod) => {
           const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
@@ -129,9 +124,7 @@ export function UploadForm() {
   }
 
   function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-      setIsDragOver(false)
-    }
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragOver(false)
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -140,7 +133,7 @@ export function UploadForm() {
     e.target.value = ''
   }
 
-  async function startClassification() {
+  async function startValidation() {
     if (!rows.length || !detection) return
     setUploadState('classifying')
     setProgress({ done: 0, total: rows.length })
@@ -151,52 +144,42 @@ export function UploadForm() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_name: detection.fileName, row_count: rows.length }),
     })
-    const jobJson = (await jobRes.json()) as { id?: string; error?: string }
+    const jobJson = (await jobRes.json()) as { id?: string }
     const jobId = jobJson.id ?? null
 
-    // Shared mutable state for concurrent workers (JS single-thread: safe across await boundaries)
-    const accumulated: (ClassificationResult | null)[] = Array(rows.length).fill(null)
+    const accumulated: (ValidationResult | null)[] = Array(rows.length).fill(null)
     let doneCount = 0
     let nextIdx = 0
 
-    async function classifyRow(i: number) {
+    async function validateRow(i: number) {
       const row = rows[i]
-      const query = row.description ? `${row.partNumber} ${row.description}` : row.partNumber
       try {
-        const res = await fetch('/api/validate', {
+        const res = await fetch('/api/validate-hts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
+          body: JSON.stringify({ hts_code: row.htsCode, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
         })
-        const data = (await res.json()) as { hts_code?: string; confidence_score?: number; error?: string }
-        const pct = data.confidence_score != null ? Math.round(data.confidence_score * 100) : null
+        const data = (await res.json()) as { valid?: boolean; description?: string; duty_rate?: string | null; error?: string }
         accumulated[i] = {
           rowIndex: i,
-          partNumber: row.partNumber,
-          htsCode: data.hts_code ?? null,
-          confidence: pct,
+          htsCode: row.htsCode,
+          label: row.label,
+          description: data.description ?? '',
+          dutyRate: data.duty_rate ?? null,
+          valid: data.valid ?? false,
           status: res.ok ? 'done' : 'error',
-          error: res.ok ? undefined : (data.error ?? 'Unknown error'),
+          error: res.ok ? undefined : (data.error ?? 'Lookup failed'),
         }
       } catch {
-        accumulated[i] = {
-          rowIndex: i,
-          partNumber: row.partNumber,
-          htsCode: null,
-          confidence: null,
-          status: 'error',
-          error: 'Network error',
-        }
+        accumulated[i] = { rowIndex: i, htsCode: row.htsCode, label: row.label, description: '', dutyRate: null, valid: false, status: 'error', error: 'Network error' }
       }
       doneCount++
       setProgress({ done: doneCount, total: rows.length })
-      setResults(accumulated.filter((r): r is ClassificationResult => r !== null))
+      setResults(accumulated.filter((r): r is ValidationResult => r !== null))
     }
 
     async function worker() {
-      while (nextIdx < rows.length) {
-        await classifyRow(nextIdx++)
-      }
+      while (nextIdx < rows.length) await validateRow(nextIdx++)
     }
 
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker))
@@ -215,27 +198,24 @@ export function UploadForm() {
     const mod = await import('xlsx')
     const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
     const wsData = results.map((r) => ({
-      'Part Number': r.partNumber,
-      'HTS Code': r.htsCode ?? '',
-      'Confidence': r.confidence != null ? `${r.confidence}%` : '',
-      'Status': r.status === 'error' ? `Error: ${r.error ?? ''}` : 'Done',
+      'HTS Code': r.htsCode,
+      ...(r.label ? { 'Part / Reference': r.label } : {}),
+      'Description': r.description,
+      'Duty Rate': r.dutyRate ?? '',
+      'Result': r.status === 'error' ? `Error: ${r.error ?? ''}` : r.valid ? 'Valid' : 'Not Found',
     }))
     const ws = XLSX.utils.json_to_sheet(wsData)
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'HTS Results')
-    XLSX.writeFile(wb, `hts-results-${new Date().toISOString().slice(0, 10)}.xlsx`)
-  }
-
-  function confColor(pct: number | null) {
-    if (pct == null) return '#94a3b8'
-    if (pct >= 80) return '#16a34a'
-    if (pct >= 60) return '#ca8a04'
-    return '#dc2626'
+    XLSX.utils.book_append_sheet(wb, ws, 'HTS Validation')
+    XLSX.writeFile(wb, `hts-validation-${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
 
   function reset() {
     setUploadState('idle'); setRows([]); setDetection(null); setResults([]); setParseError(null)
   }
+
+  const validCount = results.filter((r) => r.valid).length
+  const notFoundCount = results.filter((r) => r.status === 'done' && !r.valid).length
 
   return (
     <div className="flex flex-col gap-4">
@@ -243,28 +223,20 @@ export function UploadForm() {
       {uploadState === 'idle' && (
         <>
           <div
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
+            onDrop={handleDrop} onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave}
             onClick={() => inputRef.current?.click()}
-            className={[
-              'border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors select-none',
-              isDragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50',
-            ].join(' ')}
+            className={['border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors select-none',
+              isDragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50'].join(' ')}
           >
             <svg className={`w-10 h-10 ${isDragOver ? 'text-blue-400' : 'text-slate-300'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
             </svg>
             <div className="text-center">
               <p className="text-sm font-semibold text-slate-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>Drop XLSX or CSV here</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">or click to browse · max 10 MB</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">File must have an HTS code column · max 10 MB</p>
             </div>
             <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileInput} />
           </div>
-
           {parseError && (
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               <p className="text-[11px] font-semibold text-red-700 mb-0.5">Upload failed</p>
@@ -276,6 +248,7 @@ export function UploadForm() {
 
       {uploadState !== 'idle' && detection && (
         <>
+          {/* File pill */}
           <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
             <div className="w-8 h-8 bg-green-50 rounded-lg flex items-center justify-center shrink-0">
               <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -284,44 +257,50 @@ export function UploadForm() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{detection.fileName}</p>
-              <p className="text-[10px] text-green-600">✓ {detection.totalRows} parts · Part No. in &ldquo;{detection.partCol}&rdquo;{detection.descCol ? `, Description in "${detection.descCol}"` : ''}</p>
+              <p className="text-[10px] text-green-600">✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;{detection.labelCol ? ` · Reference in “${detection.labelCol}”` : ''}</p>
             </div>
             {uploadState === 'parsed' && <button onClick={reset} className="text-[10px] text-slate-400 hover:text-slate-600 underline shrink-0">Replace</button>}
           </div>
 
+          {/* Info banner */}
           {uploadState === 'parsed' && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-3 items-start">
               <svg className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
               <p className="text-[10.5px] text-blue-800 leading-relaxed">
-                Agent detected <strong>Part Number</strong> in &ldquo;{detection.partCol}&rdquo;
-                {detection.descCol ? <> and <strong>Description</strong> in &ldquo;{detection.descCol}&rdquo;</> : ''}. Each row becomes one USITC lookup.
+                Each HTS code will be cross-referenced directly against the USITC schedule. Codes that match exactly are <strong>Valid</strong>. Codes not found in the schedule are <strong>Not Found</strong>.
               </p>
             </div>
           )}
 
+          {/* Progress bar */}
           {uploadState === 'classifying' && (
             <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
               <div className="flex justify-between items-center mb-2">
-                <span className="text-[11px] font-semibold text-slate-700">Classifying against USITC…</span>
+                <span className="text-[11px] font-semibold text-slate-700">Validating against USITC…</span>
                 <span className="text-[11px] text-slate-500">{progress.done} / {progress.total}</span>
               </div>
               <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-blue-700 to-blue-400 rounded-full transition-all duration-300" style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }} />
               </div>
-              <p className="text-[9px] text-slate-400 mt-1.5">Processing {CONCURRENCY} rows at a time · Do not close this tab</p>
+              <p className="text-[9px] text-slate-400 mt-1.5">Running {Math.min(CONCURRENCY, rows.length)} lookups at a time · Do not close this tab</p>
             </div>
           )}
 
+          {/* Complete banner */}
           {uploadState === 'complete' && (
-            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} / {progress.total}</span>
-              <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+              <div>
+                <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} codes checked</span>
+                <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found</span>
+              </div>
+              <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors shrink-0">
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                 Download Results (.xlsx)
               </button>
             </div>
           )}
 
+          {/* Preview table */}
           {uploadState === 'parsed' && (
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5">
@@ -331,16 +310,16 @@ export function UploadForm() {
                 <thead>
                   <tr className="bg-slate-50">
                     <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide w-8">#</td>
-                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Part Number</td>
-                    {detection.descCol && <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Description</td>}
+                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">HTS Code</td>
+                    {detection.labelCol && <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Reference</td>}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.slice(0, 10).map((row, i) => (
                     <tr key={i} className="border-t border-slate-100">
                       <td className="text-[10px] text-slate-400 px-4 py-2">{i + 1}</td>
-                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{row.partNumber}</td>
-                      {detection.descCol && <td className="text-[10px] text-slate-600 px-4 py-2">{row.description}</td>}
+                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{row.htsCode}</td>
+                      {detection.labelCol && <td className="text-[10px] text-slate-600 px-4 py-2">{row.label}</td>}
                     </tr>
                   ))}
                 </tbody>
@@ -349,28 +328,31 @@ export function UploadForm() {
             </div>
           )}
 
+          {/* Results table */}
           {(uploadState === 'classifying' || uploadState === 'complete') && results.length > 0 && (
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5"><span className="text-[10px] font-semibold text-slate-700">Results</span></div>
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-50">
-                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Part Number</td>
                     <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">HTS Code</td>
-                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Conf.</td>
-                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Status</td>
+                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Description</td>
+                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Duty Rate</td>
+                    <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Result</td>
                   </tr>
                 </thead>
                 <tbody>
                   {results.map((r) => (
                     <tr key={r.rowIndex} className="border-t border-slate-100">
-                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{r.partNumber}</td>
-                      <td className="text-[10px] text-slate-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{r.htsCode ?? '—'}</td>
-                      <td className="text-[10px] font-semibold px-4 py-2" style={{ color: confColor(r.confidence) }}>{r.confidence != null ? `${r.confidence}%` : '—'}</td>
+                      <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{r.htsCode}</td>
+                      <td className="text-[10px] text-slate-600 px-4 py-2 max-w-[240px] truncate">{r.description || '—'}</td>
+                      <td className="text-[10px] text-slate-600 px-4 py-2">{r.dutyRate ?? '—'}</td>
                       <td className="px-4 py-2">
-                        {r.status === 'done'
-                          ? <span className="text-[9px] bg-green-50 text-green-700 border border-green-100 rounded px-1.5 py-0.5 font-semibold">Done</span>
-                          : <span className="text-[9px] bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5 font-semibold" title={r.error}>Error</span>}
+                        {r.status === 'error'
+                          ? <span className="text-[9px] bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5 font-semibold" title={r.error}>Error</span>
+                          : r.valid
+                            ? <span className="text-[9px] bg-green-50 text-green-700 border border-green-100 rounded px-1.5 py-0.5 font-semibold">✓ Valid</span>
+                            : <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found</span>}
                       </td>
                     </tr>
                   ))}
@@ -380,9 +362,9 @@ export function UploadForm() {
           )}
 
           {uploadState === 'parsed' && (
-            <button onClick={startClassification} className="w-full bg-[#1e293b] hover:bg-[#334155] text-white rounded-xl py-3 text-[12px] font-semibold transition-colors flex items-center justify-center gap-2" style={{ fontFamily: 'var(--font-plex-sans)' }}>
+            <button onClick={startValidation} className="w-full bg-[#1e293b] hover:bg-[#334155] text-white rounded-xl py-3 text-[12px] font-semibold transition-colors flex items-center justify-center gap-2" style={{ fontFamily: 'var(--font-plex-sans)' }}>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polygon points="5 3 19 12 5 21 5 3" /></svg>
-              Start Classification — {rows.length} parts
+              Validate {rows.length} HTS Codes
             </button>
           )}
 
