@@ -27,24 +27,59 @@ export default async function DashboardLayout({ children }: { children: React.Re
       style={{ fontFamily: 'var(--font-plex-sans), system-ui, sans-serif' }}
     >
       {/* Sidebar */}
-      <aside className="w-[220px] flex-shrink-0 bg-[#1e293b] flex flex-col">
-        <div className="px-5 py-[18px] border-b border-[#334155]">
-          <p className="text-[13px] font-bold text-slate-50 tracking-wide">HTS Validator</p>
-          <p className="text-[10px] text-[#64748b] mt-0.5 tracking-wide">USITC Classification</p>
+      <aside
+        className="w-[220px] flex-shrink-0 flex flex-col"
+        style={{ background: 'linear-gradient(175deg, #0c1525 0%, #152030 55%, #1c2b3e 100%)' }}
+      >
+        {/* Logo area */}
+        <div className="relative px-5 py-[18px] border-b border-white/[0.07]">
+          {/* Top accent line */}
+          <div
+            className="absolute top-0 left-0 right-0 h-[2px]"
+            style={{ background: 'linear-gradient(90deg, #3b82f6 0%, #1d4ed8 60%, transparent 100%)' }}
+          />
+          <div className="flex items-center gap-2.5">
+            {/* Waveform logo mark */}
+            <div
+              className="w-7 h-7 rounded-[7px] flex items-center justify-center flex-shrink-0"
+              style={{
+                background: 'rgba(59,130,246,0.15)',
+                border: '1px solid rgba(59,130,246,0.28)',
+              }}
+            >
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="none">
+                <path
+                  d="M1 5.5 L3 2 L5 8.5 L7 0.5 L9 9.5 L11 3 L13 5.5"
+                  stroke="#60a5fa"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <p className="text-[12.5px] font-bold text-white tracking-wide leading-tight">
+                HTS Validator
+              </p>
+              <p className="text-[9px] tracking-wider uppercase mt-0.5" style={{ color: 'rgba(96,165,250,0.6)' }}>
+                USITC Classification
+              </p>
+            </div>
+          </div>
         </div>
 
         <DashboardNav />
 
-        <div className="px-4 py-3.5 border-t border-[#334155] flex items-center gap-2.5 min-w-0">
+        <div className="px-4 py-3.5 border-t border-white/[0.07] flex items-center gap-2.5 min-w-0">
           <UserButton afterSignOutUrl="/" />
           <div className="min-w-0 flex-1">
             <p className="text-[10.5px] text-slate-200 font-medium truncate">{displayName}</p>
-            <p className="text-[9px] text-[#475569] truncate">{email}</p>
+            <p className="text-[9px] text-slate-500 truncate">{email}</p>
           </div>
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 overflow-auto bg-[#f8fafc]">{children}</main>
+      <main className="flex-1 min-w-0 overflow-auto content-bg">{children}</main>
     </div>
   )
 }

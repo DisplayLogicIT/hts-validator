@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 export default function UploadPage() {
   return (
     <div className="flex flex-col h-full">
-      <div className="bg-white border-b border-slate-200 px-6 py-3 shrink-0">
+      <div className="topbar px-6 py-3 shrink-0">
         <h1
           className="text-sm font-semibold text-slate-900"
           style={{ fontFamily: 'var(--font-plex-sans)' }}

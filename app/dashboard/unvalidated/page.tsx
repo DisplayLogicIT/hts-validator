@@ -45,7 +45,7 @@ export default function UnvalidatedPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="bg-white border-b border-slate-200 px-6 py-3 shrink-0 flex items-center justify-between">
+      <div className="topbar px-6 py-3 shrink-0 flex items-center justify-between">
         <div>
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Unvalidated Parts</h1>
           <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Codes not found in USITC or never checked — review and correct</p>
@@ -57,8 +57,8 @@ export default function UnvalidatedPage() {
 
       <div className="flex-1 overflow-auto p-6">
         {loading ? (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="bg-slate-50 border-b border-slate-200 h-10" />
+          <div className="data-card">
+            <div className="bg-slate-50 border-b border-slate-100 h-10" />
             {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}
           </div>
         ) : parts.length === 0 ? (
@@ -69,10 +69,10 @@ export default function UnvalidatedPage() {
             <p className="text-[12px]">All parts validated — nothing needs attention</p>
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="data-card">
             <table className="w-full border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
+                <tr className="bg-slate-50 border-b border-slate-100">
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Part / Reference</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">HTS Code</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Status</td>
@@ -81,7 +81,7 @@ export default function UnvalidatedPage() {
               </thead>
               <tbody>
                 {parts.map((part) => (
-                  <tr key={part.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                  <tr key={part.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition-colors">
                     <td className="px-4 py-3">
                       <p className="text-[11px] font-medium text-slate-900 truncate max-w-[200px]" style={{ fontFamily: 'var(--font-plex-sans)' }}>
                         {part.part_number || '—'}

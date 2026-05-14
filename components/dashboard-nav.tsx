@@ -78,28 +78,53 @@ export function DashboardNav() {
 
   return (
     <nav className="flex-1 px-2.5 py-3 flex flex-col gap-0.5">
-      <p className="text-[9px] font-semibold text-[#475569] uppercase tracking-[0.08em] px-2.5 py-2">
-        Workspace
-      </p>
+      {/* Section label with decorative line */}
+      <div className="flex items-center gap-2 px-2.5 py-2">
+        <p className="text-[9px] font-semibold uppercase tracking-[0.1em] shrink-0" style={{ color: 'rgba(96,165,250,0.45)' }}>
+          Workspace
+        </p>
+        <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
+      </div>
 
       {navItems.map((item) => {
         const isActive = item.exact
           ? pathname === item.href
           : pathname.startsWith(item.href)
 
+        if (isActive) {
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="relative flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-white text-[11.5px] font-medium overflow-hidden"
+              style={{ background: 'linear-gradient(90deg, rgba(59,130,246,0.22) 0%, rgba(59,130,246,0.07) 100%)' }}
+            >
+              <span
+                className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
+                style={{ background: 'linear-gradient(180deg, #60a5fa, #3b82f6)' }}
+              />
+              <span className="text-blue-300">{item.icon}</span>
+              {item.label}
+            </Link>
+          )
+        }
+
         return (
           <Link
             key={item.href}
             href={item.href}
-            className={
-              isActive
-                ? 'flex items-center gap-2.5 px-2.5 py-[7px] rounded-md bg-[#334155] border-l-2 border-blue-400 text-slate-100 text-[11.5px] font-medium'
-                : 'flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[#64748b] text-[11.5px] hover:text-slate-300 transition-colors'
-            }
+            className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[11.5px] transition-colors"
+            style={{ color: 'rgba(100,116,139,1)' }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'rgba(203,213,225,1)'
+              e.currentTarget.style.background = 'rgba(255,255,255,0.04)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'rgba(100,116,139,1)'
+              e.currentTarget.style.background = 'transparent'
+            }}
           >
-            <span className={isActive ? 'text-blue-300' : 'text-[#475569]'}>
-              {item.icon}
-            </span>
+            <span style={{ color: 'rgba(71,85,105,1)' }}>{item.icon}</span>
             {item.label}
           </Link>
         )
@@ -108,10 +133,17 @@ export function DashboardNav() {
       {disabledItems.map((item) => (
         <div
           key={item.label}
-          className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[#475569] text-[11.5px] select-none cursor-not-allowed"
+          className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[11.5px] select-none cursor-not-allowed"
+          style={{ color: 'rgba(71,85,105,0.7)' }}
         >
-          {item.icon}
+          <span style={{ color: 'rgba(51,65,85,0.8)' }}>{item.icon}</span>
           {item.label}
+          <span
+            className="ml-auto text-[8px] font-semibold rounded px-1 py-0.5 tracking-wide"
+            style={{ background: 'rgba(51,65,85,0.5)', color: 'rgba(100,116,139,0.9)' }}
+          >
+            SOON
+          </span>
         </div>
       ))}
     </nav>

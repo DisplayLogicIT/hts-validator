@@ -53,7 +53,7 @@ export default function HistoryPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="bg-white border-b border-slate-200 px-6 py-3 shrink-0 flex items-center justify-between">
+      <div className="topbar px-6 py-3 shrink-0 flex items-center justify-between">
         <div>
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Job History</h1>
           <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Every upload and validation run</p>
@@ -65,8 +65,8 @@ export default function HistoryPage() {
 
       <div className="flex-1 overflow-auto p-6">
         {loading ? (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="bg-slate-50 border-b border-slate-200 h-10" />
+          <div className="data-card">
+            <div className="bg-slate-50 border-b border-slate-100 h-10" />
             {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}
           </div>
         ) : jobs.length === 0 ? (
@@ -78,10 +78,10 @@ export default function HistoryPage() {
             <p className="text-[12px]">No jobs yet — upload a file to begin</p>
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="data-card">
             <table className="w-full border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
+                <tr className="bg-slate-50 border-b border-slate-100">
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">File / Query</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Status</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Total</td>
@@ -94,7 +94,7 @@ export default function HistoryPage() {
                 {jobs.map((job) => {
                   const label = job.type === 'batch' ? (job.file_name ?? 'Untitled batch') : (job.input_query ?? 'Single lookup')
                   return (
-                    <tr key={job.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                    <tr key={job.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition-colors">
                       <td className="px-4 py-3">
                         <p className="text-[11px] font-medium text-slate-900 truncate max-w-[200px]" style={{ fontFamily: 'var(--font-plex-sans)' }} title={label}>{label}</p>
                         <p className="text-[9px] text-slate-400">{job.type === 'batch' ? 'Batch upload' : 'Single lookup'}</p>
