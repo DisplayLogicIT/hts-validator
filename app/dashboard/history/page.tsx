@@ -10,15 +10,10 @@ interface JobRow {
   file_name: string | null
   row_count: number | null
   rows_done: number
+  valid_count: number
+  not_found_count: number
   input_query: string | null
   created_at: string
-  validation_results: { confidence_score: number | null }[]
-}
-
-function avgConf(results: { confidence_score: number | null }[]): number | null {
-  const valid = results.filter((r) => r.confidence_score != null)
-  if (valid.length === 0) return null
-  return valid.reduce((sum, r) => sum + (r.confidence_score ?? 0), 0) / valid.length
 }
 
 function formatDate(iso: string): string {
@@ -31,12 +26,6 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-function confColor(pct: number): string {
-  if (pct >= 80) return 'text-green-600'
-  if (pct >= 60) return 'text-amber-600'
-  return 'text-red-600'
-}
-
 export default async function HistoryPage() {
   const { userId, orgId } = await auth()
   const scopeId = orgId ?? userId!
@@ -44,17 +33,7 @@ export default async function HistoryPage() {
   const supabase = createSupabaseAdminClient()
   const { data: jobs } = await supabase
     .from('validation_jobs')
-    .select(`
-      id,
-      type,
-      status,
-      file_name,
-      row_count,
-      rows_done,
-      input_query,
-      created_at,
-      validation_results ( confidence_score )
-    `)
+    .select('id, type, status, file_name, row_count, rows_done, valid_count, not_found_count, input_query, created_at')
     .eq('org_id', scopeId)
     .order('created_at', { ascending: false })
 
@@ -74,7 +53,7 @@ export default async function HistoryPage() {
             className="text-[11px] text-slate-400"
             style={{ fontFamily: 'var(--font-plex-sans)' }}
           >
-            Every classification run — single lookups and batch jobs
+            Every upload and validation run
           </p>
         </div>
         <span className="text-[11px] text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
@@ -89,7 +68,7 @@ export default async function HistoryPage() {
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
             </svg>
-            <p className="text-[12px]">No jobs yet — run a lookup or upload a file</p>
+            <p className="text-[12px]">No jobs yet — upload a file to begin</p>
           </div>
         ) : (
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -97,17 +76,15 @@ export default async function HistoryPage() {
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">File / Query</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Type</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Rows</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Avg Conf.</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Status</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Total</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Valid</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Not Found</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Date</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide"></td>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((job) => {
-                  const avg = avgConf(job.validation_results)
-                  const avgPct = avg != null ? Math.round(avg * 100) : null
                   const label =
                     job.type === 'batch'
                       ? (job.file_name ?? 'Untitled batch')
@@ -124,33 +101,29 @@ export default async function HistoryPage() {
                           {label}
                         </p>
                         <p className="text-[9px] text-slate-400">
-                          {job.type === 'batch' ? `${job.row_count ?? 0} parts` : 'Single lookup'}
+                          {job.type === 'batch' ? 'Batch upload' : 'Single lookup'}
                         </p>
                       </td>
                       <td className="px-4 py-3">
-                        {job.type === 'batch' ? (
-                          <span className="text-[9px] bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.5 font-semibold">Batch</span>
+                        {job.status === 'complete' ? (
+                          <span className="text-[9px] bg-green-50 text-green-700 border border-green-100 rounded px-1.5 py-0.5 font-semibold">Complete</span>
+                        ) : job.status === 'processing' ? (
+                          <span className="text-[9px] bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.5 font-semibold">Processing</span>
                         ) : (
-                          <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">Single</span>
+                          <span className="text-[9px] bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5 font-semibold">{job.status}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-[11px] text-slate-800">
-                        {job.type === 'batch' ? (job.row_count ?? '—') : 1}
+                        {job.row_count ?? job.rows_done ?? '—'}
                       </td>
-                      <td className="px-4 py-3">
-                        {avgPct != null ? (
-                          <span className={`text-[11px] font-semibold ${confColor(avgPct)}`}>
-                            {avgPct}%
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-slate-400">—</span>
-                        )}
+                      <td className="px-4 py-3 text-[11px] font-semibold text-green-700">
+                        {job.valid_count > 0 ? job.valid_count : <span className="text-slate-400 font-normal">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-[11px] font-semibold text-amber-700">
+                        {job.not_found_count > 0 ? job.not_found_count : <span className="text-slate-400 font-normal">—</span>}
                       </td>
                       <td className="px-4 py-3 text-[11px] text-slate-500">
                         {formatDate(job.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-[10px] text-blue-500 hover:text-blue-700 cursor-pointer underline">View</span>
                       </td>
                     </tr>
                   )

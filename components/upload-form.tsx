@@ -1,9 +1,11 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import Papa from 'papaparse'
 
 const CONCURRENCY = 20
+const CACHE_KEY = 'hts_upload_cache'
+const MAX_CACHE_ROWS = 500
 
 interface ParsedRow {
   htsCode: string
@@ -49,6 +51,41 @@ export function UploadForm() {
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [results, setResults] = useState<ValidationResult[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Hydrate from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CACHE_KEY)
+      if (!saved) return
+      const cache = JSON.parse(saved) as {
+        uploadState: UploadState
+        rows: ParsedRow[]
+        detection: DetectionInfo
+        results: ValidationResult[]
+        progress: { done: number; total: number }
+      }
+      if (cache.uploadState === 'complete' || cache.uploadState === 'parsed') {
+        setUploadState(cache.uploadState)
+        setRows(cache.rows)
+        setDetection(cache.detection)
+        setResults(cache.results)
+        setProgress(cache.progress)
+      }
+    } catch { /* ignore corrupt cache */ }
+  }, [])
+
+  // Persist to localStorage on change (skip classifying — mid-run state can't be resumed)
+  useEffect(() => {
+    if (uploadState === 'idle') {
+      localStorage.removeItem(CACHE_KEY)
+      return
+    }
+    if (uploadState === 'classifying') return
+    if (rows.length > MAX_CACHE_ROWS) return
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, rows, detection, results, progress }))
+    } catch { /* storage quota exceeded */ }
+  }, [uploadState, rows, detection, results, progress])
 
   function processRawRows(data: Record<string, string>[], headers: string[], fileName: string) {
     if (data.length === 0) {
@@ -184,15 +221,18 @@ export function UploadForm() {
 
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker))
 
+    const validCount = accumulated.filter((r): r is ValidationResult => r !== null && r.valid).length
+    const notFoundCount = accumulated.filter((r): r is ValidationResult => r !== null && !r.valid).length
+
     if (jobId) {
       await fetch(`/api/jobs/${jobId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
+        body: JSON.stringify({ status: 'complete', rows_done: rows.length, valid_count: validCount, not_found_count: notFoundCount }),
       })
     }
 
-    // Sync results to parts catalog (fire-and-forget — don't block UI)
+    // Sync results to parts catalog (fire-and-forget)
     const partsPayload = accumulated
       .filter((r): r is ValidationResult => r !== null)
       .map((r) => ({
@@ -230,7 +270,13 @@ export function UploadForm() {
   }
 
   function reset() {
-    setUploadState('idle'); setRows([]); setDetection(null); setResults([]); setParseError(null)
+    localStorage.removeItem(CACHE_KEY)
+    setUploadState('idle')
+    setRows([])
+    setDetection(null)
+    setResults([])
+    setParseError(null)
+    setProgress({ done: 0, total: 0 })
   }
 
   const validCount = results.filter((r) => r.valid).length
@@ -278,7 +324,17 @@ export function UploadForm() {
               <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{detection.fileName}</p>
               <p className="text-[10px] text-green-600">✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;{detection.labelCol ? ` · Reference in "${detection.labelCol}"` : ''}</p>
             </div>
-            {uploadState === 'parsed' && <button onClick={reset} className="text-[10px] text-slate-400 hover:text-slate-600 underline shrink-0">Replace</button>}
+            {uploadState !== 'classifying' && (
+              <button
+                onClick={reset}
+                title="Clear file"
+                className="w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors shrink-0"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
           </div>
 
           {/* Info banner */}
@@ -312,10 +368,13 @@ export function UploadForm() {
                 <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} codes checked</span>
                 <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found · saved to catalog</span>
               </div>
-              <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors shrink-0">
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
-                Download Results (.xlsx)
-              </button>
+              <div className="flex items-center gap-3 shrink-0">
+                <a href="/dashboard/history" className="text-[10px] text-blue-600 hover:text-blue-800 underline">View in History →</a>
+                <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                  Download (.xlsx)
+                </button>
+              </div>
             </div>
           )}
 
@@ -385,10 +444,6 @@ export function UploadForm() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polygon points="5 3 19 12 5 21 5 3" /></svg>
               Validate {rows.length} HTS Codes
             </button>
-          )}
-
-          {uploadState === 'complete' && (
-            <button onClick={reset} className="text-[11px] text-slate-500 hover:text-slate-700 underline text-center w-full">Upload another file</button>
           )}
         </>
       )}

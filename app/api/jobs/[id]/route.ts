@@ -23,10 +23,12 @@ export async function PATCH(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const body = await req.json() as { status?: string; rows_done?: number }
+  const body = await req.json() as { status?: string; rows_done?: number; valid_count?: number; not_found_count?: number }
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (body.status !== undefined) updates.status = body.status
   if (body.rows_done !== undefined) updates.rows_done = body.rows_done
+  if (body.valid_count !== undefined) updates.valid_count = body.valid_count
+  if (body.not_found_count !== undefined) updates.not_found_count = body.not_found_count
 
   const { error } = await supabase
     .from('validation_jobs')
