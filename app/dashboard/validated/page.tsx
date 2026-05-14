@@ -1,7 +1,6 @@
-import { auth } from '@clerk/nextjs/server'
-import { createSupabaseAdminClient } from '@/lib/supabase/server'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useState, useEffect } from 'react'
 
 interface Part {
   id: string
@@ -21,38 +20,50 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-export default async function ValidatedPage() {
-  const { userId, orgId } = await auth()
-  const scopeId = orgId ?? userId!
+function SkeletonRow() {
+  return (
+    <div className="border-t border-slate-100 px-4 py-3.5 flex items-center gap-4">
+      <div className="flex-1 space-y-1.5">
+        <div className="h-2.5 w-28 bg-slate-100 rounded animate-pulse" />
+      </div>
+      <div className="h-2.5 w-24 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-48 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-10 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-20 bg-slate-100 rounded animate-pulse" />
+    </div>
+  )
+}
 
-  const supabase = createSupabaseAdminClient()
-  const { data } = await supabase
-    .from('parts')
-    .select('id, part_number, hts_code, usitc_description, duty_rate, last_validated_at')
-    .eq('org_id', scopeId)
-    .eq('validation_status', 'valid')
-    .order('last_validated_at', { ascending: false })
+export default function ValidatedPage() {
+  const [parts, setParts] = useState<Part[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const parts = (data ?? []) as Part[]
+  useEffect(() => {
+    fetch('/api/parts?status=valid')
+      .then((r) => r.json())
+      .then((d: { parts?: Part[] }) => { setParts(d.parts ?? []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
 
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-slate-200 px-6 py-3 shrink-0 flex items-center justify-between">
         <div>
-          <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-            Validated Parts
-          </h1>
-          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-            HTS codes confirmed against the USITC schedule · re-checked every Monday
-          </p>
+          <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Validated Parts</h1>
+          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>HTS codes confirmed against the USITC schedule · re-checked every Monday</p>
         </div>
         <span className="text-[11px] font-semibold bg-green-50 text-green-700 border border-green-200 rounded-full px-2.5 py-1">
-          {parts.length} valid
+          {loading ? <span className="inline-block w-10 h-2 bg-green-200 rounded animate-pulse" /> : `${parts.length} valid`}
         </span>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
-        {parts.length === 0 ? (
+        {loading ? (
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="bg-slate-50 border-b border-slate-200 h-10" />
+            {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}
+          </div>
+        ) : parts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400">
             <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -80,9 +91,7 @@ export default async function ValidatedPage() {
                       </p>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-[10.5px] font-medium text-blue-800" style={{ fontFamily: 'var(--font-plex-mono)' }}>
-                        {part.hts_code}
-                      </span>
+                      <span className="text-[10.5px] font-medium text-blue-800" style={{ fontFamily: 'var(--font-plex-mono)' }}>{part.hts_code}</span>
                     </td>
                     <td className="px-4 py-3 max-w-[260px]">
                       <p className="text-[10.5px] text-slate-600 truncate">{part.usitc_description || '—'}</p>

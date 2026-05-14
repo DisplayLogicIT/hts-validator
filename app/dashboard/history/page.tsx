@@ -1,7 +1,6 @@
-import { auth } from '@clerk/nextjs/server'
-import { createSupabaseAdminClient } from '@/lib/supabase/server'
+'use client'
 
-export const dynamic = 'force-dynamic'
+import { useState, useEffect } from 'react'
 
 interface JobRow {
   id: string
@@ -19,25 +18,38 @@ interface JobRow {
 function formatDate(iso: string): string {
   const d = new Date(iso)
   const now = new Date()
-  const isToday = d.toDateString() === now.toDateString()
-  if (isToday) {
+  if (d.toDateString() === now.toDateString()) {
     return `Today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-export default async function HistoryPage() {
-  const { userId, orgId } = await auth()
-  const scopeId = orgId ?? userId!
+function SkeletonRow() {
+  return (
+    <div className="border-t border-slate-100 px-4 py-3.5 flex items-center gap-4">
+      <div className="flex-1 space-y-1.5">
+        <div className="h-2.5 w-36 bg-slate-100 rounded animate-pulse" />
+        <div className="h-2 w-16 bg-slate-100 rounded animate-pulse" />
+      </div>
+      <div className="h-4 w-16 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
+      <div className="h-2.5 w-16 bg-slate-100 rounded animate-pulse" />
+    </div>
+  )
+}
 
-  const supabase = createSupabaseAdminClient()
-  const { data: jobs } = await supabase
-    .from('validation_jobs')
-    .select('id, type, status, file_name, row_count, rows_done, valid_count, not_found_count, input_query, created_at')
-    .eq('org_id', scopeId)
-    .order('created_at', { ascending: false })
+export default function HistoryPage() {
+  const [jobs, setJobs] = useState<JobRow[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const rows = (jobs ?? []) as JobRow[]
+  useEffect(() => {
+    fetch('/api/jobs')
+      .then((r) => r.json())
+      .then((d: { jobs?: JobRow[] }) => { setJobs(d.jobs ?? []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
 
   return (
     <div className="flex flex-col h-full">
@@ -46,11 +58,18 @@ export default async function HistoryPage() {
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Job History</h1>
           <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Every upload and validation run</p>
         </div>
-        <span className="text-[11px] text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">{rows.length} total</span>
+        <span className="text-[11px] text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
+          {loading ? <span className="inline-block w-8 h-2 bg-slate-200 rounded animate-pulse" /> : `${jobs.length} total`}
+        </span>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
-        {rows.length === 0 ? (
+        {loading ? (
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="bg-slate-50 border-b border-slate-200 h-10" />
+            {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}
+          </div>
+        ) : jobs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400">
             <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -72,7 +91,7 @@ export default async function HistoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((job) => {
+                {jobs.map((job) => {
                   const label = job.type === 'batch' ? (job.file_name ?? 'Untitled batch') : (job.input_query ?? 'Single lookup')
                   return (
                     <tr key={job.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">

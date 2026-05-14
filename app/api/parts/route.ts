@@ -9,14 +9,22 @@ export async function GET(req: NextRequest) {
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const scopeId = orgId ?? userId
 
-  const status = req.nextUrl.searchParams.get('status')
+  const statusParam = req.nextUrl.searchParams.get('status')
   const supabase = createSupabaseAdminClient()
   let query = supabase
     .from('parts')
     .select('id, part_number, hts_code, validation_status, usitc_description, duty_rate, last_validated_at, updated_at')
     .eq('org_id', scopeId)
     .order('updated_at', { ascending: false })
-  if (status) query = query.eq('validation_status', status)
+
+  if (statusParam) {
+    const statuses = statusParam.split(',').map((s) => s.trim()).filter(Boolean)
+    if (statuses.length === 1) {
+      query = query.eq('validation_status', statuses[0])
+    } else {
+      query = query.in('validation_status', statuses)
+    }
+  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
