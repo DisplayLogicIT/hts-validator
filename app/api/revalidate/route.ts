@@ -16,12 +16,14 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createSupabaseAdminClient()
-  const { data: parts, error } = await supabase
+  const { data, error } = await supabase
     .from('parts')
     .select('id, hts_code')
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!parts || parts.length === 0) return NextResponse.json({ ok: true, updated: 0 })
+
+  const parts = data ?? []
+  if (parts.length === 0) return NextResponse.json({ ok: true, updated: 0 })
 
   let nextIdx = 0
   let updated = 0
