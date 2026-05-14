@@ -7,7 +7,7 @@ const CONCURRENCY = 20
 
 interface ParsedRow {
   htsCode: string
-  label: string // part number or other reference column, shown in output
+  label: string
 }
 
 interface DetectionInfo {
@@ -191,6 +191,25 @@ export function UploadForm() {
         body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
       })
     }
+
+    // Sync results to parts catalog (fire-and-forget — don't block UI)
+    const partsPayload = accumulated
+      .filter((r): r is ValidationResult => r !== null)
+      .map((r) => ({
+        part_number: r.label || r.htsCode,
+        hts_code: r.htsCode,
+        validation_status: (r.status === 'error' ? 'error' : r.valid ? 'valid' : 'not_found') as 'valid' | 'not_found' | 'error',
+        usitc_description: r.description || undefined,
+        duty_rate: r.dutyRate ?? undefined,
+      }))
+    if (partsPayload.length > 0) {
+      fetch('/api/parts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parts: partsPayload }),
+      }).catch(() => {})
+    }
+
     setUploadState('complete')
   }
 
@@ -257,7 +276,7 @@ export function UploadForm() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{detection.fileName}</p>
-              <p className="text-[10px] text-green-600">✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;{detection.labelCol ? ` · Reference in “${detection.labelCol}”` : ''}</p>
+              <p className="text-[10px] text-green-600">✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;{detection.labelCol ? ` · Reference in "${detection.labelCol}"` : ''}</p>
             </div>
             {uploadState === 'parsed' && <button onClick={reset} className="text-[10px] text-slate-400 hover:text-slate-600 underline shrink-0">Replace</button>}
           </div>
@@ -267,7 +286,7 @@ export function UploadForm() {
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-3 items-start">
               <svg className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
               <p className="text-[10.5px] text-blue-800 leading-relaxed">
-                Each HTS code will be cross-referenced directly against the USITC schedule. Codes that match exactly are <strong>Valid</strong>. Codes not found in the schedule are <strong>Not Found</strong>.
+                Each HTS code will be cross-referenced directly against the USITC schedule. Codes that match exactly are <strong>Valid</strong>. Codes not found in the schedule are <strong>Not Found</strong>. Results are saved to your Validated and Unvalidated pages.
               </p>
             </div>
           )}
@@ -291,7 +310,7 @@ export function UploadForm() {
             <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
               <div>
                 <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} codes checked</span>
-                <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found</span>
+                <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found · saved to catalog</span>
               </div>
               <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors shrink-0">
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
