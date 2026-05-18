@@ -5,7 +5,6 @@ import Papa from 'papaparse'
 
 const CONCURRENCY = 20
 const CACHE_KEY = 'hts_upload_cache'
-const MAX_CACHE_ROWS = 500
 
 interface ParsedRow {
   htsCode: string
@@ -63,22 +62,22 @@ export function UploadForm() {
   const [parseError, setParseError] = useState<string | null>(null)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [results, setResults] = useState<ValidationResult[]>([])
+  const [saveError, setSaveError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Restore from cache on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(CACHE_KEY)
       if (!saved) return
       const cache = JSON.parse(saved) as {
         uploadState: UploadState
-        rows: ParsedRow[]
         detection: DetectionInfo
         results: ValidationResult[]
         progress: { done: number; total: number }
       }
-      if (cache.uploadState === 'complete' || cache.uploadState === 'parsed') {
-        setUploadState(cache.uploadState)
-        setRows(cache.rows)
+      if (cache.uploadState === 'complete') {
+        setUploadState('complete')
         setDetection(cache.detection)
         setResults(cache.results)
         setProgress(cache.progress)
@@ -86,17 +85,17 @@ export function UploadForm() {
     } catch { /* ignore corrupt cache */ }
   }, [])
 
+  // Persist only in complete state, without rows (not needed post-validation)
   useEffect(() => {
     if (uploadState === 'idle') {
       localStorage.removeItem(CACHE_KEY)
       return
     }
-    if (uploadState === 'classifying') return
-    if (rows.length > MAX_CACHE_ROWS) return
+    if (uploadState !== 'complete') return
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, rows, detection, results, progress }))
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, detection, results, progress }))
     } catch { /* storage quota exceeded */ }
-  }, [uploadState, rows, detection, results, progress])
+  }, [uploadState, detection, results, progress])
 
   function processRawRows(data: Record<string, string>[], headers: string[], fileName: string) {
     if (data.length === 0) {
@@ -186,6 +185,7 @@ export function UploadForm() {
   async function startValidation() {
     if (!rows.length || !detection) return
     setUploadState('classifying')
+    setSaveError(null)
     setProgress({ done: 0, total: rows.length })
     setResults([])
 
@@ -257,12 +257,21 @@ export function UploadForm() {
         duty_rate: r.dutyRate ?? undefined,
         ...(jobId ? { job_id: jobId } : {}),
       }))
+
     if (partsPayload.length > 0) {
-      fetch('/api/parts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parts: partsPayload }),
-      }).catch(() => {})
+      try {
+        const partsRes = await fetch('/api/parts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parts: partsPayload }),
+        })
+        if (!partsRes.ok) {
+          const errData = await partsRes.json().catch(() => ({}))
+          setSaveError(`Results validated but failed to save to catalog: ${(errData as { error?: string }).error ?? partsRes.statusText}. Download your results now.`)
+        }
+      } catch {
+        setSaveError('Results validated but could not reach the server to save to catalog. Download your results now.')
+      }
     }
 
     setUploadState('complete')
@@ -292,6 +301,7 @@ export function UploadForm() {
     setDetection(null)
     setResults([])
     setParseError(null)
+    setSaveError(null)
     setProgress({ done: 0, total: 0 })
   }
 
@@ -339,8 +349,8 @@ export function UploadForm() {
               <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{detection.fileName}</p>
               <p className="text-[10px] text-green-600">
                 ✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;
-                {detection.labelCol ? ` · Part# in “${detection.labelCol}”` : ''}
-                {detection.descCol ? ` · Desc in “${detection.descCol}”` : ''}
+                {detection.labelCol ? ` · Part# in "${detection.labelCol}"` : ''}
+                {detection.descCol ? ` · Desc in "${detection.descCol}"` : ''}
               </p>
             </div>
             {uploadState !== 'classifying' && (
@@ -384,13 +394,26 @@ export function UploadForm() {
                 <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} codes checked</span>
                 <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found · saved to catalog</span>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <a href="/dashboard/history" className="text-[10px] text-blue-600 hover:text-blue-800 underline">View in History →</a>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={reset}
+                  className="flex items-center gap-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-600 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.75" /></svg>
+                  Start Over
+                </button>
                 <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                   Download (.xlsx)
                 </button>
               </div>
+            </div>
+          )}
+
+          {saveError && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+              <p className="text-[11px] font-semibold text-amber-700 mb-0.5">Save warning</p>
+              <p className="text-[11px] text-amber-700">{saveError}</p>
             </div>
           )}
 
