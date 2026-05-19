@@ -31,10 +31,13 @@ export async function GET() {
       .from('validation_jobs')
       .select('id')
       .limit(1)
-    if (error) throw error
-    report.supabase = { ok: true, rowCount: data?.length ?? 0 }
+    if (error) {
+      report.supabase = { ok: false, error: JSON.stringify(error) }
+    } else {
+      report.supabase = { ok: true, rowCount: data?.length ?? 0 }
+    }
   } catch (e) {
-    report.supabase = { ok: false, error: e instanceof Error ? e.message : String(e) }
+    report.supabase = { ok: false, error: e instanceof Error ? e.message : JSON.stringify(e) }
   }
 
   return NextResponse.json(report, { status: 200 })
