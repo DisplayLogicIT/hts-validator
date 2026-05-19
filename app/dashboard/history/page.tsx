@@ -43,13 +43,17 @@ export default function HistoryPage() {
 
   useEffect(() => {
     fetch('/api/jobs')
-      .then((r) => r.json())
+      .then(async (r) => {
+        const text = await r.text()
+        console.log('[api/jobs] status:', r.status, 'body:', text)
+        return JSON.parse(text)
+      })
       .then((d: { jobs?: JobRow[]; error?: string }) => {
         if (d.error) { setFetchError(d.error); setLoading(false); return }
         setJobs(d.jobs ?? [])
         setLoading(false)
       })
-      .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
+      .catch((e: Error) => { console.error('[api/jobs] parse error:', e); setFetchError(e.message); setLoading(false) })
   }, [])
 
   return (
