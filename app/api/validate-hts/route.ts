@@ -4,14 +4,14 @@ import { lookupHtsCode } from '@/lib/hts/usitc'
 import { jobRepository } from '@/lib/db/jobs'
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth()
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await req.json() as { hts_code?: string; job_id?: string; row_index?: number }
-  const htsCode = body.hts_code?.trim()
-  if (!htsCode) return NextResponse.json({ error: 'hts_code is required' }, { status: 400 })
-
   try {
+    const { userId } = await auth()
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const body = await req.json() as { hts_code?: string; job_id?: string; row_index?: number }
+    const htsCode = body.hts_code?.trim()
+    if (!htsCode) return NextResponse.json({ error: 'hts_code is required' }, { status: 400 })
+
     const result = await lookupHtsCode(htsCode)
 
     if (body.job_id) {

@@ -4,16 +4,15 @@ import { runHtsAgent } from '@/lib/agent/validate'
 import { jobRepository } from '@/lib/db/jobs'
 
 export async function POST(req: NextRequest) {
-  const { userId, orgId } = await auth()
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await req.json() as { query?: string; job_id?: string; row_index?: number }
-  const query = body.query?.trim()
-  if (!query) return NextResponse.json({ error: 'query is required' }, { status: 400 })
-
-  const scopeId = orgId ?? userId
-
   try {
+    const { userId, orgId } = await auth()
+    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const body = await req.json() as { query?: string; job_id?: string; row_index?: number }
+    const query = body.query?.trim()
+    if (!query) return NextResponse.json({ error: 'query is required' }, { status: 400 })
+
+    const scopeId = orgId ?? userId
     const result = await runHtsAgent(query)
 
     const isSingleLookup = !body.job_id
