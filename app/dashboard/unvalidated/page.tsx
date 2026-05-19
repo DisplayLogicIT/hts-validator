@@ -2,30 +2,20 @@
 
 import { useState, useEffect } from 'react'
 
-interface LookupResult {
-  suggested_hts: string
-  duty_rate: string
-  confidence: string
-  reasoning: string
-}
-
-interface Part {
+interface ResultRow {
   id: string
-  part_number: string
-  description: string | null
-  hts_code: string
-  validation_status: string
-  lookup_status: string
-  lookup_result: LookupResult | null
+  input_text: string
+  hts_code: string | null
+  hts_description: string | null
 }
 
-interface Job {
+interface JobGroup {
   id: string
   file_name: string | null
   input_query: string | null
   type: string
   created_at: string
-  parts: Part[]
+  results: ResultRow[]
 }
 
 function formatDate(iso: string): string {
@@ -38,57 +28,30 @@ function formatDate(iso: string): string {
 }
 
 export default function UnvalidatedPage() {
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [jobs, setJobs] = useState<JobGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
-  const [lookingUp, setLookingUp] = useState<Set<string>>(new Set())
-  const [lookupResults, setLookupResults] = useState<Map<string, LookupResult>>(new Map())
-  const [expandedLookup, setExpandedLookup] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/parts?view=jobs&status=not_found,error,pending')
+    fetch('/api/results?status=not_found')
       .then((r) => r.json())
-      .then((d: { jobs?: Job[]; error?: string }) => {
+      .then((d: { jobs?: JobGroup[]; error?: string }) => {
         if (d.error) { setFetchError(d.error); setLoading(false); return }
-        const fetchedJobs = d.jobs ?? []
-        setJobs(fetchedJobs)
-        // Pre-populate results from DB (previously looked-up parts)
-        const init = new Map<string, LookupResult>()
-        for (const job of fetchedJobs) {
-          for (const part of job.parts) {
-            if (part.lookup_result && part.lookup_status === 'complete') {
-              init.set(part.id, part.lookup_result)
-            }
-          }
-        }
-        setLookupResults(init)
+        setJobs(d.jobs ?? [])
         setLoading(false)
       })
       .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
   }, [])
 
-  async function runLookup(partId: string) {
-    setLookingUp((prev) => new Set(prev).add(partId))
-    setExpandedLookup(partId)
-    try {
-      const res = await fetch(`/api/parts/${partId}/lookup`, { method: 'POST' })
-      const data = await res.json() as { result?: LookupResult }
-      if (data.result) {
-        setLookupResults((prev) => new Map(prev).set(partId, data.result!))
-      }
-    } catch { /* show stale state */ }
-    setLookingUp((prev) => { const s = new Set(prev); s.delete(partId); return s })
-  }
-
-  const totalUnvalidated = jobs.reduce((sum, j) => sum + j.parts.length, 0)
+  const totalUnvalidated = jobs.reduce((sum, j) => sum + j.results.length, 0)
 
   return (
     <div className="flex flex-col h-full">
       <div className="topbar px-6 py-3 shrink-0 flex items-center justify-between">
         <div>
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Unvalidated</h1>
-          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Codes not found in USITC · use Research to find the correct classification</p>
+          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Codes not found in USITC · review and re-submit with a corrected code</p>
         </div>
         <span className="text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2.5 py-1">
           {loading ? <span className="inline-block w-14 h-2 bg-amber-200 rounded animate-pulse" /> : `${totalUnvalidated} need attention`}
@@ -116,7 +79,7 @@ export default function UnvalidatedPage() {
             <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p className="text-[12px]">All parts validated — nothing needs attention</p>
+            <p className="text-[12px]">All clear — no codes failed validation</p>
           </div>
         ) : (
           jobs.map((job) => {
@@ -140,7 +103,7 @@ export default function UnvalidatedPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">
-                      {job.parts.length} unvalidated
+                      {job.results.length} not found
                     </span>
                     <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <polyline points="6 9 12 15 18 9" />
@@ -153,114 +116,23 @@ export default function UnvalidatedPage() {
                     <table className="w-full border-collapse">
                       <thead>
                         <tr className="bg-slate-50">
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Part Number</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Description</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">HTS Code</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Input Code</td>
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Status</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Action</td>
                         </tr>
                       </thead>
                       <tbody>
-                        {job.parts.flatMap((part) => {
-                          const isLookingUp = lookingUp.has(part.id)
-                          const result = lookupResults.get(part.id)
-                          const isExpanded = expandedLookup === part.id
-
-                          const mainRow = (
-                            <tr key={part.id} className="border-t border-slate-100 hover:bg-slate-50/40 transition-colors">
-                              <td className="px-4 py-2.5">
-                                <p className="text-[11px] font-medium text-slate-900 truncate max-w-[130px]" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-                                  {part.part_number || '—'}
-                                </p>
-                              </td>
-                              <td className="px-4 py-2.5 max-w-[160px]">
-                                <p className="text-[10.5px] text-slate-500 truncate">{part.description || '—'}</p>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <span className="text-[10.5px] font-medium text-slate-700" style={{ fontFamily: 'var(--font-plex-mono)' }}>{part.hts_code}</span>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                {part.validation_status === 'not_found' && (
-                                  <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found</span>
-                                )}
-                                {part.validation_status === 'error' && (
-                                  <span className="text-[9px] bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5 font-semibold">Error</span>
-                                )}
-                                {part.validation_status === 'pending' && (
-                                  <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">Pending</span>
-                                )}
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <button
-                                  onClick={() => {
-                                    if (result) {
-                                      setExpandedLookup(isExpanded ? null : part.id)
-                                    } else {
-                                      runLookup(part.id)
-                                    }
-                                  }}
-                                  disabled={isLookingUp}
-                                  className={[
-                                    'text-[10px] font-semibold px-2.5 py-1 rounded-md border transition-colors whitespace-nowrap',
-                                    result
-                                      ? 'bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100'
-                                      : 'bg-[#0c1525] text-white border-transparent hover:bg-[#152030]',
-                                    isLookingUp ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
-                                  ].join(' ')}
-                                >
-                                  {isLookingUp ? (
-                                    <span className="flex items-center gap-1.5">
-                                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                      </svg>
-                                      Researching…
-                                    </span>
-                                  ) : result ? (
-                                    isExpanded ? 'Hide' : 'View Result'
-                                  ) : (
-                                    'Research →'
-                                  )}
-                                </button>
-                              </td>
-                            </tr>
-                          )
-
-                          if (!isExpanded || !result) return [mainRow]
-
-                          const confidenceColor =
-                            result.confidence === 'high' ? '#15803d'
-                            : result.confidence === 'medium' ? '#b45309'
-                            : '#dc2626'
-
-                          const resultRow = (
-                            <tr key={`${part.id}-lookup`} className="border-t border-blue-100 bg-blue-50/50">
-                              <td colSpan={5} className="px-4 py-3">
-                                <div className="flex flex-col gap-2">
-                                  <div className="flex items-start gap-6 flex-wrap">
-                                    <div>
-                                      <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold mb-0.5">Suggested HTS</p>
-                                      <p className="text-[13px] font-bold text-blue-800" style={{ fontFamily: 'var(--font-plex-mono)' }}>
-                                        {result.suggested_hts || '—'}
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold mb-0.5">Duty Rate</p>
-                                      <p className="text-[13px] font-bold text-slate-800">{result.duty_rate || '—'}</p>
-                                    </div>
-                                    <div>
-                                      <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold mb-0.5">Confidence</p>
-                                      <p className="text-[12px] font-semibold capitalize" style={{ color: confidenceColor }}>{result.confidence}</p>
-                                    </div>
-                                  </div>
-                                  <p className="text-[10.5px] text-slate-600 leading-relaxed border-t border-blue-100 pt-2">{result.reasoning}</p>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-
-                          return [mainRow, resultRow]
-                        })}
+                        {job.results.map((r) => (
+                          <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/40 transition-colors">
+                            <td className="px-4 py-2.5">
+                              <p className="text-[11px] font-medium text-slate-900 truncate max-w-[320px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
+                                {r.input_text}
+                              </p>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found in USITC</span>
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>

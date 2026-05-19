@@ -2,25 +2,22 @@
 
 import { useState, useEffect } from 'react'
 
-interface Part {
+interface ResultRow {
   id: string
-  part_number: string
-  description: string | null
+  input_text: string
   hts_code: string
-  usitc_description: string | null
-  duty_rate: string | null
-  last_validated_at: string | null
+  hts_description: string | null
+  source_url: string | null
+  raw_response: { duty_rate?: string | null } | null
 }
 
-interface Job {
+interface JobGroup {
   id: string
   file_name: string | null
   input_query: string | null
   type: string
   created_at: string
-  valid_count: number
-  row_count: number | null
-  parts: Part[]
+  results: ResultRow[]
 }
 
 function formatDate(iso: string): string {
@@ -33,15 +30,15 @@ function formatDate(iso: string): string {
 }
 
 export default function ValidatedPage() {
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [jobs, setJobs] = useState<JobGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/parts?view=jobs&status=valid')
+    fetch('/api/results?status=valid')
       .then((r) => r.json())
-      .then((d: { jobs?: Job[]; error?: string }) => {
+      .then((d: { jobs?: JobGroup[]; error?: string }) => {
         if (d.error) { setFetchError(d.error); setLoading(false); return }
         setJobs(d.jobs ?? [])
         setLoading(false)
@@ -49,7 +46,7 @@ export default function ValidatedPage() {
       .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
   }, [])
 
-  const totalValid = jobs.reduce((sum, j) => sum + j.parts.length, 0)
+  const totalValid = jobs.reduce((sum, j) => sum + j.results.length, 0)
 
   return (
     <div className="flex flex-col h-full">
@@ -108,7 +105,7 @@ export default function ValidatedPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[10px] font-semibold bg-green-50 text-green-700 border border-green-100 rounded-full px-2 py-0.5">
-                      {job.parts.length} valid
+                      {job.results.length} valid
                     </span>
                     <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <polyline points="6 9 12 15 18 9" />
@@ -121,32 +118,28 @@ export default function ValidatedPage() {
                     <table className="w-full border-collapse">
                       <thead>
                         <tr className="bg-slate-50">
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Part Number</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Description</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Input</td>
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">HTS Code</td>
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">USITC Description</td>
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Duty Rate</td>
                         </tr>
                       </thead>
                       <tbody>
-                        {job.parts.map((part) => (
-                          <tr key={part.id} className="border-t border-slate-100 hover:bg-slate-50/60 transition-colors">
+                        {job.results.map((r) => (
+                          <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/60 transition-colors">
                             <td className="px-4 py-2.5">
-                              <p className="text-[11px] font-medium text-slate-900 truncate max-w-[140px]" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-                                {part.part_number || '—'}
+                              <p className="text-[11px] font-medium text-slate-900 truncate max-w-[160px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
+                                {r.input_text}
                               </p>
                             </td>
-                            <td className="px-4 py-2.5 max-w-[160px]">
-                              <p className="text-[10.5px] text-slate-500 truncate">{part.description || '—'}</p>
+                            <td className="px-4 py-2.5">
+                              <span className="text-[10.5px] font-medium text-blue-800" style={{ fontFamily: 'var(--font-plex-mono)' }}>{r.hts_code}</span>
+                            </td>
+                            <td className="px-4 py-2.5 max-w-[240px]">
+                              <p className="text-[10.5px] text-slate-600 truncate">{r.hts_description || '—'}</p>
                             </td>
                             <td className="px-4 py-2.5">
-                              <span className="text-[10.5px] font-medium text-blue-800" style={{ fontFamily: 'var(--font-plex-mono)' }}>{part.hts_code}</span>
-                            </td>
-                            <td className="px-4 py-2.5 max-w-[220px]">
-                              <p className="text-[10.5px] text-slate-600 truncate">{part.usitc_description || '—'}</p>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <span className="text-[10.5px] text-slate-700">{part.duty_rate || '—'}</span>
+                              <span className="text-[10.5px] text-slate-700">{r.raw_response?.duty_rate || '—'}</span>
                             </td>
                           </tr>
                         ))}
