@@ -40,6 +40,7 @@ function formatDate(iso: string): string {
 export default function UnvalidatedPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
   const [lookingUp, setLookingUp] = useState<Set<string>>(new Set())
   const [lookupResults, setLookupResults] = useState<Map<string, LookupResult>>(new Map())
@@ -48,7 +49,8 @@ export default function UnvalidatedPage() {
   useEffect(() => {
     fetch('/api/parts?view=jobs&status=not_found,error,pending')
       .then((r) => r.json())
-      .then((d: { jobs?: Job[] }) => {
+      .then((d: { jobs?: Job[]; error?: string }) => {
+        if (d.error) { setFetchError(d.error); setLoading(false); return }
         const fetchedJobs = d.jobs ?? []
         setJobs(fetchedJobs)
         // Pre-populate results from DB (previously looked-up parts)
@@ -63,7 +65,7 @@ export default function UnvalidatedPage() {
         setLookupResults(init)
         setLoading(false)
       })
-      .catch(() => setLoading(false))
+      .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
   }, [])
 
   async function runLookup(partId: string) {
@@ -94,7 +96,11 @@ export default function UnvalidatedPage() {
       </div>
 
       <div className="flex-1 overflow-auto p-6 flex flex-col gap-3">
-        {loading ? (
+        {fetchError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[12px] text-red-700">
+            <span className="font-semibold">API error: </span>{fetchError}
+          </div>
+        ) : loading ? (
           Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="data-card px-4 py-3.5 flex items-center gap-3 animate-pulse">
               <div className="w-7 h-7 rounded-lg bg-slate-100" />

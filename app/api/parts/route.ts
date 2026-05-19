@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
 
     const { data: jobs, error: jobsError } = await supabase
       .from('validation_jobs')
-      .select('id, file_name, input_query, type, created_at, valid_count, not_found_count, row_count, status')
+      .select('id, file_name, input_query, type, created_at, row_count, status')
       .eq('org_id', scopeId)
       .order('created_at', { ascending: false })
 

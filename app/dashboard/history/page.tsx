@@ -9,8 +9,6 @@ interface JobRow {
   file_name: string | null
   row_count: number | null
   rows_done: number
-  valid_count: number
-  not_found_count: number
   input_query: string | null
   created_at: string
 }
@@ -33,8 +31,6 @@ function SkeletonRow() {
       </div>
       <div className="h-4 w-16 bg-slate-100 rounded animate-pulse" />
       <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
-      <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
-      <div className="h-2.5 w-8 bg-slate-100 rounded animate-pulse" />
       <div className="h-2.5 w-16 bg-slate-100 rounded animate-pulse" />
     </div>
   )
@@ -43,12 +39,17 @@ function SkeletonRow() {
 export default function HistoryPage() {
   const [jobs, setJobs] = useState<JobRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/jobs')
       .then((r) => r.json())
-      .then((d: { jobs?: JobRow[] }) => { setJobs(d.jobs ?? []); setLoading(false) })
-      .catch(() => setLoading(false))
+      .then((d: { jobs?: JobRow[]; error?: string }) => {
+        if (d.error) { setFetchError(d.error); setLoading(false); return }
+        setJobs(d.jobs ?? [])
+        setLoading(false)
+      })
+      .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
   }, [])
 
   return (
@@ -64,7 +65,11 @@ export default function HistoryPage() {
       </div>
 
       <div className="flex-1 overflow-auto p-6">
-        {loading ? (
+        {fetchError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[12px] text-red-700">
+            <span className="font-semibold">API error: </span>{fetchError}
+          </div>
+        ) : loading ? (
           <div className="data-card">
             <div className="bg-slate-50 border-b border-slate-100 h-10" />
             {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)}
@@ -83,10 +88,9 @@ export default function HistoryPage() {
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">File / Query</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Type</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Status</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Total</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Valid</td>
-                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Not Found</td>
+                  <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Rows</td>
                   <td className="text-[9px] text-slate-400 px-4 py-3 font-semibold uppercase tracking-wide">Date</td>
                 </tr>
               </thead>
@@ -96,8 +100,12 @@ export default function HistoryPage() {
                   return (
                     <tr key={job.id} className="border-t border-slate-100 hover:bg-slate-50/80 transition-colors">
                       <td className="px-4 py-3">
-                        <p className="text-[11px] font-medium text-slate-900 truncate max-w-[200px]" style={{ fontFamily: 'var(--font-plex-sans)' }} title={label}>{label}</p>
-                        <p className="text-[9px] text-slate-400">{job.type === 'batch' ? 'Batch upload' : 'Single lookup'}</p>
+                        <p className="text-[11px] font-medium text-slate-900 truncate max-w-[220px]" style={{ fontFamily: 'var(--font-plex-sans)' }} title={label}>{label}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        {job.type === 'batch'
+                          ? <span className="text-[9px] bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.5 font-semibold">Batch</span>
+                          : <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">Single</span>}
                       </td>
                       <td className="px-4 py-3">
                         {job.status === 'complete'
@@ -107,12 +115,6 @@ export default function HistoryPage() {
                             : <span className="text-[9px] bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5 font-semibold">{job.status}</span>}
                       </td>
                       <td className="px-4 py-3 text-[11px] text-slate-800">{job.row_count ?? job.rows_done ?? '—'}</td>
-                      <td className="px-4 py-3 text-[11px] font-semibold text-green-700">
-                        {job.valid_count > 0 ? job.valid_count : <span className="text-slate-400 font-normal">—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-[11px] font-semibold text-amber-700">
-                        {job.not_found_count > 0 ? job.not_found_count : <span className="text-slate-400 font-normal">—</span>}
-                      </td>
                       <td className="px-4 py-3 text-[11px] text-slate-500">{formatDate(job.created_at)}</td>
                     </tr>
                   )
