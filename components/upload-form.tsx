@@ -1,24 +1,11 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import Papa from 'papaparse'
+import { parseFile, type DetectionInfo, type ParsedRow } from '@/lib/file-parser'
+import { runConcurrent } from '@/lib/concurrency'
 
 const CONCURRENCY = 20
 const CACHE_KEY = 'hts_upload_cache'
-
-interface ParsedRow {
-  htsCode: string
-  label: string
-  csvDesc: string
-}
-
-interface DetectionInfo {
-  htsCol: string
-  labelCol: string | null
-  descCol: string | null
-  fileName: string
-  totalRows: number
-}
 
 interface ValidationResult {
   rowIndex: number
@@ -33,26 +20,6 @@ interface ValidationResult {
 }
 
 type UploadState = 'idle' | 'parsed' | 'classifying' | 'complete'
-
-function detectColumns(headers: string[]): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
-  const htsKeywords = ['hts', 'tariff', 'harmonized', 'htsus', 'hs']
-  const labelKeywords = ['partnumber', 'part_number', 'part number', 'nsn', 'pn', 'p/n', 'item', 'name', 'product']
-  const descKeywords = ['descriptn', 'description', 'desc']
-  const h = headers.map((s) => s.toLowerCase().trim())
-  const htsIdxFound = h.findIndex((c) => htsKeywords.some((k) => c.includes(k)))
-  const htsIdx = htsIdxFound === -1 ? 0 : htsIdxFound
-  const labelIdxFound = h.findIndex((c, i) => i !== htsIdx && labelKeywords.some((k) => c.includes(k)))
-  const descIdxFound = h.findIndex((c, i) => {
-    if (i === htsIdx) return false
-    if (labelIdxFound !== -1 && i === labelIdxFound) return false
-    return descKeywords.some((k) => c.includes(k))
-  })
-  return {
-    htsIdx,
-    labelIdx: labelIdxFound === -1 ? null : labelIdxFound,
-    descIdx: descIdxFound === -1 ? null : descIdxFound,
-  }
-}
 
 export function UploadForm() {
   const [uploadState, setUploadState] = useState<UploadState>('idle')
@@ -85,73 +52,24 @@ export function UploadForm() {
     } catch { /* ignore corrupt cache */ }
   }, [])
 
-  // Persist only in complete state, without rows (not needed post-validation)
+  // Persist only in complete state
   useEffect(() => {
-    if (uploadState === 'idle') {
-      localStorage.removeItem(CACHE_KEY)
-      return
-    }
+    if (uploadState === 'idle') { localStorage.removeItem(CACHE_KEY); return }
     if (uploadState !== 'complete') return
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, detection, results, progress }))
     } catch { /* storage quota exceeded */ }
   }, [uploadState, detection, results, progress])
 
-  function processRawRows(data: Record<string, string>[], headers: string[], fileName: string) {
-    if (data.length === 0) {
-      setParseError('No rows found. Make sure the file has a header row and data rows.')
-      return
-    }
-    const { htsIdx, labelIdx, descIdx } = detectColumns(headers)
-    const htsCol = headers[htsIdx]
-    const labelCol = labelIdx !== null ? headers[labelIdx] : null
-    const descCol = descIdx !== null ? headers[descIdx] : null
-    const parsed: ParsedRow[] = data
-      .map((row) => ({
-        htsCode: String(row[htsCol] ?? '').trim(),
-        label: labelCol ? String(row[labelCol] ?? '').trim() : '',
-        csvDesc: descCol ? String(row[descCol] ?? '').trim() : '',
-      }))
-      .filter((r) => r.htsCode.length > 0)
-    if (parsed.length === 0) {
-      setParseError(`No HTS codes found in column "${htsCol}". Make sure the file has a header row with a column named HTS, Tariff, or HTSUS.`)
-      return
-    }
-    setRows(parsed)
-    setDetection({ htsCol, labelCol, descCol, fileName, totalRows: parsed.length })
-    setUploadState('parsed')
-  }
-
-  function parseFile(file: File) {
+  async function handleFile(file: File) {
     setParseError(null)
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    if (ext === 'csv') {
-      Papa.parse<Record<string, string>>(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (result) => processRawRows(result.data, result.meta.fields ?? [], file.name),
-        error: (err) => setParseError(`CSV error: ${err.message}`),
-      })
-    } else {
-      import('xlsx')
-        .then((mod) => {
-          const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
-          const reader = new FileReader()
-          reader.onload = (e) => {
-            try {
-              const wb = XLSX.read(e.target?.result, { type: 'array' })
-              const ws = wb.Sheets[wb.SheetNames[0]]
-              const data = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
-              const headers = data.length > 0 ? Object.keys(data[0]) : []
-              processRawRows(data, headers, file.name)
-            } catch (err) {
-              setParseError(`Could not read file: ${err instanceof Error ? err.message : String(err)}`)
-            }
-          }
-          reader.onerror = () => setParseError('File read failed. Try again.')
-          reader.readAsArrayBuffer(file)
-        })
-        .catch((err) => setParseError(`Parser failed to load: ${err instanceof Error ? err.message : String(err)}`))
+    try {
+      const { rows: parsed, detection: info } = await parseFile(file)
+      setRows(parsed)
+      setDetection(info)
+      setUploadState('parsed')
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Failed to parse file')
     }
   }
 
@@ -159,26 +77,17 @@ export function UploadForm() {
     e.preventDefault()
     setIsDragOver(false)
     const file = e.dataTransfer.files[0]
-    if (file) parseFile(file)
+    if (file) handleFile(file)
   }
 
-  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-    setIsDragOver(true)
-  }
-
-  function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-    setIsDragOver(true)
-  }
-
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>)  { e.preventDefault(); setIsDragOver(true) }
+  function handleDragEnter(e: React.DragEvent<HTMLDivElement>) { e.preventDefault(); setIsDragOver(true) }
   function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
     if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragOver(false)
   }
-
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (file) parseFile(file)
+    if (file) handleFile(file)
     e.target.value = ''
   }
 
@@ -194,84 +103,49 @@ export function UploadForm() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_name: detection.fileName, row_count: rows.length }),
     })
-    const jobJson = (await jobRes.json()) as { id?: string }
-    const jobId = jobJson.id ?? null
+    const { id: jobId = null } = (await jobRes.json()) as { id?: string }
 
     const accumulated: (ValidationResult | null)[] = Array(rows.length).fill(null)
-    let doneCount = 0
-    let nextIdx = 0
 
-    async function validateRow(i: number) {
-      const row = rows[i]
-      try {
-        const res = await fetch('/api/validate-hts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hts_code: row.htsCode, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
-        })
-        const data = (await res.json()) as { valid?: boolean; description?: string; duty_rate?: string | null; error?: string }
-        accumulated[i] = {
-          rowIndex: i,
-          htsCode: row.htsCode,
-          label: row.label,
-          csvDesc: row.csvDesc,
-          description: data.description ?? '',
-          dutyRate: data.duty_rate ?? null,
-          valid: data.valid ?? false,
-          status: res.ok ? 'done' : 'error',
-          error: res.ok ? undefined : (data.error ?? 'Lookup failed'),
+    await runConcurrent(
+      rows,
+      async (row, i) => {
+        try {
+          const res = await fetch('/api/validate-hts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hts_code: row.htsCode, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
+          })
+          const data = (await res.json()) as { valid?: boolean; description?: string; duty_rate?: string | null; error?: string }
+          accumulated[i] = {
+            rowIndex: i,
+            htsCode: row.htsCode,
+            label: row.label,
+            csvDesc: row.csvDesc,
+            description: data.description ?? '',
+            dutyRate: data.duty_rate ?? null,
+            valid: data.valid ?? false,
+            status: res.ok ? 'done' : 'error',
+            error: res.ok ? undefined : (data.error ?? 'Lookup failed'),
+          }
+        } catch {
+          accumulated[i] = { rowIndex: i, htsCode: row.htsCode, label: row.label, csvDesc: row.csvDesc, description: '', dutyRate: null, valid: false, status: 'error', error: 'Network error' }
         }
-      } catch {
-        accumulated[i] = { rowIndex: i, htsCode: row.htsCode, label: row.label, csvDesc: row.csvDesc, description: '', dutyRate: null, valid: false, status: 'error', error: 'Network error' }
-      }
-      doneCount++
-      setProgress({ done: doneCount, total: rows.length })
-      setResults(accumulated.filter((r): r is ValidationResult => r !== null))
-    }
-
-    async function worker() {
-      while (nextIdx < rows.length) await validateRow(nextIdx++)
-    }
-
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker))
-
-    const validCount = accumulated.filter((r): r is ValidationResult => r !== null && r.valid).length
-    const notFoundCount = accumulated.filter((r): r is ValidationResult => r !== null && !r.valid).length
+        setResults(accumulated.filter((r): r is ValidationResult => r !== null))
+        return null
+      },
+      {
+        concurrency: CONCURRENCY,
+        onProgress: (done, total) => setProgress({ done, total }),
+      },
+    )
 
     if (jobId) {
       await fetch(`/api/jobs/${jobId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'complete', rows_done: rows.length, valid_count: validCount, not_found_count: notFoundCount }),
+        body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
       })
-    }
-
-    const partsPayload = accumulated
-      .filter((r): r is ValidationResult => r !== null)
-      .map((r) => ({
-        part_number: r.label || r.htsCode,
-        description: r.csvDesc || null,
-        hts_code: r.htsCode,
-        validation_status: (r.status === 'error' ? 'error' : r.valid ? 'valid' : 'not_found') as 'valid' | 'not_found' | 'error',
-        usitc_description: r.description || undefined,
-        duty_rate: r.dutyRate ?? undefined,
-        ...(jobId ? { job_id: jobId } : {}),
-      }))
-
-    if (partsPayload.length > 0) {
-      try {
-        const partsRes = await fetch('/api/parts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parts: partsPayload }),
-        })
-        if (!partsRes.ok) {
-          const errData = await partsRes.json().catch(() => ({}))
-          setSaveError(`Results validated but failed to save to catalog: ${(errData as { error?: string }).error ?? partsRes.statusText}. Download your results now.`)
-        }
-      } catch {
-        setSaveError('Results validated but could not reach the server to save to catalog. Download your results now.')
-      }
     }
 
     setUploadState('complete')
@@ -305,7 +179,7 @@ export function UploadForm() {
     setProgress({ done: 0, total: 0 })
   }
 
-  const validCount = results.filter((r) => r.valid).length
+  const validCount    = results.filter((r) => r.valid).length
   const notFoundCount = results.filter((r) => r.status === 'done' && !r.valid).length
 
   return (
@@ -350,15 +224,11 @@ export function UploadForm() {
               <p className="text-[10px] text-green-600">
                 ✓ {detection.totalRows} codes · HTS in &ldquo;{detection.htsCol}&rdquo;
                 {detection.labelCol ? ` · Part# in "${detection.labelCol}"` : ''}
-                {detection.descCol ? ` · Desc in "${detection.descCol}"` : ''}
+                {detection.descCol  ? ` · Desc in "${detection.descCol}"` : ''}
               </p>
             </div>
             {uploadState !== 'classifying' && (
-              <button
-                onClick={reset}
-                title="Clear file"
-                className="w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors shrink-0"
-              >
+              <button onClick={reset} title="Clear file" className="w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors shrink-0">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
@@ -395,10 +265,7 @@ export function UploadForm() {
                 <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found · saved to catalog</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={reset}
-                  className="flex items-center gap-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-600 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors"
-                >
+                <button onClick={reset} className="flex items-center gap-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-600 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.75" /></svg>
                   Start Over
                 </button>
@@ -428,7 +295,7 @@ export function UploadForm() {
                     <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide w-8">#</td>
                     <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">HTS Code</td>
                     {detection.labelCol && <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Part Number</td>}
-                    {detection.descCol && <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Description</td>}
+                    {detection.descCol  && <td className="text-[8px] text-slate-400 px-4 py-2 font-semibold uppercase tracking-wide">Description</td>}
                   </tr>
                 </thead>
                 <tbody>
@@ -437,7 +304,7 @@ export function UploadForm() {
                       <td className="text-[10px] text-slate-400 px-4 py-2">{i + 1}</td>
                       <td className="text-[10px] text-blue-800 px-4 py-2 font-medium" style={{ fontFamily: 'var(--font-plex-mono)' }}>{row.htsCode}</td>
                       {detection.labelCol && <td className="text-[10px] text-slate-600 px-4 py-2">{row.label}</td>}
-                      {detection.descCol && <td className="text-[10px] text-slate-500 px-4 py-2 truncate max-w-[200px]">{row.csvDesc}</td>}
+                      {detection.descCol  && <td className="text-[10px] text-slate-500 px-4 py-2 truncate max-w-[200px]">{row.csvDesc}</td>}
                     </tr>
                   ))}
                 </tbody>

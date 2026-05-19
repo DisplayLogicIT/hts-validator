@@ -25,8 +25,17 @@ function normalizeCode(code: string): string {
   return code.replace(/[.\s-]/g, '').toLowerCase()
 }
 
+// In-memory cache for deduplication within a single function instance.
+// Persistent caching is handled by the hts_cache table (migration 006).
+const lookupCache = new Map<string, HtsLookupResult>()
+const searchCache = new Map<string, HtsResult[]>()
+
 // Used by the single Lookup page — AI agent searches by product keyword
 export async function searchHts(query: string): Promise<HtsResult[]> {
+  const cacheKey = query.toLowerCase().trim()
+  const cached = searchCache.get(cacheKey)
+  if (cached) return cached
+
   const params = new URLSearchParams({ keyword: query })
   const res = await fetch(`${BASE}/search?${params}`, {
     headers: { Accept: 'application/json' },
@@ -36,7 +45,7 @@ export async function searchHts(query: string): Promise<HtsResult[]> {
   const items = (await res.json()) as Record<string, unknown>[]
   const queryWords = query.toLowerCase().split(/[\s,+]+/).filter((w) => w.length > 3)
 
-  return items
+  const results = items
     .filter((item) => {
       const code = String(item.htsno ?? '')
       if (!code.includes('.') || code.length < 7) return false
@@ -51,11 +60,18 @@ export async function searchHts(query: string): Promise<HtsResult[]> {
       source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(String(item.htsno ?? ''))}`,
     }))
     .filter((r) => r.description.length > 0)
+
+  searchCache.set(cacheKey, results)
+  return results
 }
 
 // Used by the batch Upload page — validates an HTS code directly against USITC
 export async function lookupHtsCode(htsCode: string): Promise<HtsLookupResult> {
   const cleaned = htsCode.trim()
+  const cacheKey = normalizeCode(cleaned)
+  const cached = lookupCache.get(cacheKey)
+  if (cached) return cached
+
   const params = new URLSearchParams({ keyword: cleaned })
   const res = await fetch(`${BASE}/search?${params}`, {
     headers: { Accept: 'application/json' },
@@ -63,22 +79,18 @@ export async function lookupHtsCode(htsCode: string): Promise<HtsLookupResult> {
   if (!res.ok) throw new Error(`USITC API error: ${res.status}`)
 
   const items = (await res.json()) as Record<string, unknown>[]
-  const normalizedInput = normalizeCode(cleaned)
+  const match = items.find((item) => normalizeCode(String(item.htsno ?? '')) === cacheKey)
 
-  const match = items.find((item) => {
-    const code = normalizeCode(String(item.htsno ?? ''))
-    return code === normalizedInput
-  })
+  const result: HtsLookupResult = match
+    ? {
+        valid: true,
+        hts_code: String(match.htsno ?? cleaned),
+        description: stripHtml(String(match.description ?? '')),
+        duty_rate: match.general ? String(match.general) : null,
+        source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(String(match.htsno ?? ''))}`,
+      }
+    : { valid: false, hts_code: cleaned, description: '', duty_rate: null, source_url: '' }
 
-  if (!match) {
-    return { valid: false, hts_code: cleaned, description: '', duty_rate: null, source_url: '' }
-  }
-
-  return {
-    valid: true,
-    hts_code: String(match.htsno ?? cleaned),
-    description: stripHtml(String(match.description ?? '')),
-    duty_rate: match.general ? String(match.general) : null,
-    source_url: `https://hts.usitc.gov/search?keyword=${encodeURIComponent(String(match.htsno ?? ''))}`,
-  }
+  lookupCache.set(cacheKey, result)
+  return result
 }

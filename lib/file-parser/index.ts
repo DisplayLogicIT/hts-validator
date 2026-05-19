@@ -1,0 +1,96 @@
+import Papa from 'papaparse'
+
+export interface ParsedRow {
+  htsCode: string
+  label: string
+  csvDesc: string
+}
+
+export interface DetectionInfo {
+  htsCol: string
+  labelCol: string | null
+  descCol: string | null
+  fileName: string
+  totalRows: number
+}
+
+export interface ParseResult {
+  rows: ParsedRow[]
+  detection: DetectionInfo
+}
+
+const HTS_KEYWORDS   = ['hts', 'tariff', 'harmonized', 'htsus', 'hs']
+const LABEL_KEYWORDS = ['partnumber', 'part_number', 'part number', 'nsn', 'pn', 'p/n', 'item', 'name', 'product']
+const DESC_KEYWORDS  = ['descriptn', 'description', 'desc']
+
+export function detectColumns(headers: string[]): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
+  const h = headers.map((s) => s.toLowerCase().trim())
+  const htsIdxFound = h.findIndex((c) => HTS_KEYWORDS.some((k) => c.includes(k)))
+  const htsIdx = htsIdxFound === -1 ? 0 : htsIdxFound
+  const labelIdxFound = h.findIndex((c, i) => i !== htsIdx && LABEL_KEYWORDS.some((k) => c.includes(k)))
+  const descIdxFound = h.findIndex((c, i) => {
+    if (i === htsIdx) return false
+    if (labelIdxFound !== -1 && i === labelIdxFound) return false
+    return DESC_KEYWORDS.some((k) => c.includes(k))
+  })
+  return {
+    htsIdx,
+    labelIdx: labelIdxFound === -1 ? null : labelIdxFound,
+    descIdx: descIdxFound === -1 ? null : descIdxFound,
+  }
+}
+
+function buildResult(data: Record<string, string>[], headers: string[], fileName: string): ParseResult {
+  if (data.length === 0) throw new Error('No rows found. Make sure the file has a header row and data rows.')
+  const { htsIdx, labelIdx, descIdx } = detectColumns(headers)
+  const htsCol   = headers[htsIdx]
+  const labelCol = labelIdx !== null ? headers[labelIdx] : null
+  const descCol  = descIdx  !== null ? headers[descIdx]  : null
+  const rows: ParsedRow[] = data
+    .map((row) => ({
+      htsCode: String(row[htsCol]   ?? '').trim(),
+      label:   labelCol ? String(row[labelCol] ?? '').trim() : '',
+      csvDesc: descCol  ? String(row[descCol]  ?? '').trim() : '',
+    }))
+    .filter((r) => r.htsCode.length > 0)
+  if (rows.length === 0) {
+    throw new Error(`No HTS codes found in column "${htsCol}". Make sure the file has a header row with a column named HTS, Tariff, or HTSUS.`)
+  }
+  return { rows, detection: { htsCol, labelCol, descCol, fileName, totalRows: rows.length } }
+}
+
+export function parseFile(file: File): Promise<ParseResult> {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  if (ext === 'csv') {
+    return new Promise((resolve, reject) => {
+      Papa.parse<Record<string, string>>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (result) => {
+          try { resolve(buildResult(result.data, result.meta.fields ?? [], file.name)) }
+          catch (err) { reject(err) }
+        },
+        error: (err) => reject(new Error(`CSV error: ${err.message}`)),
+      })
+    })
+  }
+  return import('xlsx').then(
+    (mod) => new Promise((resolve, reject) => {
+      const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        try {
+          const wb   = XLSX.read(e.target?.result, { type: 'array' })
+          const ws   = wb.Sheets[wb.SheetNames[0]]
+          const data = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
+          resolve(buildResult(data, data.length > 0 ? Object.keys(data[0]) : [], file.name))
+        } catch (err) {
+          reject(new Error(`Could not read file: ${err instanceof Error ? err.message : String(err)}`))
+        }
+      }
+      reader.onerror = () => reject(new Error('File read failed. Try again.'))
+      reader.readAsArrayBuffer(file)
+    }),
+    (err) => Promise.reject(new Error(`Parser failed to load: ${err instanceof Error ? err.message : String(err)}`)),
+  )
+}

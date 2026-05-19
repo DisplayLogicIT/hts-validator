@@ -1,7 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { createAnthropicClient, MODELS } from '@/lib/llm'
 import { searchHts, type HtsResult } from '@/lib/hts/usitc'
-
-const client = new Anthropic()
 
 export interface ValidationResult {
   hts_code: string
@@ -53,34 +52,32 @@ function extractJson(response: Anthropic.Message): ValidationResult {
   if (!jsonMatch) throw new Error(`Agent response did not contain JSON: ${textBlock.text}`)
   const parsed = JSON.parse(jsonMatch[0]) as Partial<ValidationResult>
   return {
-    hts_code: parsed.hts_code ?? '',
-    hts_description: parsed.hts_description ?? '',
+    hts_code:         parsed.hts_code         ?? '',
+    hts_description:  parsed.hts_description  ?? '',
     confidence_score: typeof parsed.confidence_score === 'number' ? parsed.confidence_score : 0,
-    duty_rate: parsed.duty_rate ?? null,
-    source_url: parsed.source_url ?? '',
-    reasoning: parsed.reasoning ?? '',
+    duty_rate:        parsed.duty_rate         ?? null,
+    source_url:       parsed.source_url        ?? '',
+    reasoning:        parsed.reasoning         ?? '',
   }
 }
 
 export async function runHtsAgent(query: string): Promise<ValidationResult> {
+  const client = createAnthropicClient()
   const messages: Anthropic.MessageParam[] = [
     { role: 'user', content: `Classify this part for HTS purposes: ${query}` },
   ]
 
   // Turn 0 — Claude searches (or answers directly if it already knows)
   const turn0 = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: MODELS.agent,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     tools: [SEARCH_TOOL],
     messages,
   })
 
-  if (turn0.stop_reason === 'end_turn') {
-    return extractJson(turn0)
-  }
+  if (turn0.stop_reason === 'end_turn') return extractJson(turn0)
 
-  // Process tool results from turn 0
   messages.push({ role: 'assistant', content: turn0.content })
 
   const toolBlocks = turn0.content.filter(
@@ -91,18 +88,14 @@ export async function runHtsAgent(query: string): Promise<ValidationResult> {
     toolBlocks.map(async (block) => {
       const { query: searchQuery } = block.input as { query: string }
       let results: HtsResult[] = []
-      try {
-        results = await searchHts(searchQuery)
-      } catch (err) {
-        console.error('USITC search error:', err)
-      }
+      try { results = await searchHts(searchQuery) }
+      catch (err) { console.error('USITC search error:', err) }
       return {
         type: 'tool_result' as const,
         tool_use_id: block.id,
-        content:
-          results.length > 0
-            ? JSON.stringify(results)
-            : 'No relevant results found. Return your best estimate with confidence_score below 0.5 and explain in reasoning.',
+        content: results.length > 0
+          ? JSON.stringify(results)
+          : 'No relevant results found. Return your best estimate with confidence_score below 0.5 and explain in reasoning.',
       }
     }),
   )
@@ -111,7 +104,7 @@ export async function runHtsAgent(query: string): Promise<ValidationResult> {
 
   // Turn 1 — Force a text response; no further tool calls allowed
   const turn1 = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: MODELS.agent,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
     tools: [SEARCH_TOOL],

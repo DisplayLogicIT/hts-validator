@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { createAnthropicClient, MODELS } from '@/lib/llm'
 
 export async function POST(
   _req: NextRequest,
@@ -25,15 +25,12 @@ export async function POST(
     return NextResponse.json({ error: 'Part not found' }, { status: 404 })
   }
 
-  await supabase
-    .from('parts')
-    .update({ lookup_status: 'running' })
-    .eq('id', part.id)
+  await supabase.from('parts').update({ lookup_status: 'running' }).eq('id', part.id)
 
   try {
-    const client = new Anthropic()
+    const client = createAnthropicClient()
     const msg = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELS.fastLookup,
       max_tokens: 512,
       messages: [
         {
@@ -79,13 +76,10 @@ Respond ONLY with this exact JSON structure, no other text:
 
     return NextResponse.json({ ok: true, result })
   } catch (err) {
-    await supabase
-      .from('parts')
-      .update({ lookup_status: 'error' })
-      .eq('id', part.id)
+    await supabase.from('parts').update({ lookup_status: 'error' }).eq('id', part.id)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Lookup failed' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server'
 import { NextRequest, NextResponse } from 'next/server'
-import { createSupabaseAdminClient } from '@/lib/supabase/server'
+import { jobRepository } from '@/lib/db/jobs'
 
 export async function PATCH(
   req: NextRequest,
@@ -11,30 +11,21 @@ export async function PATCH(
 
   const { id } = await params
   const scopeId = orgId ?? userId
-  const supabase = createSupabaseAdminClient()
 
-  const { data: job } = await supabase
-    .from('validation_jobs')
-    .select('org_id')
-    .eq('id', id)
-    .single()
-
-  if (!job || job.org_id !== scopeId) {
+  const ownerId = await jobRepository.getJobOwnerId(id)
+  if (!ownerId || ownerId !== scopeId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const body = await req.json() as { status?: string; rows_done?: number; valid_count?: number; not_found_count?: number }
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-  if (body.status !== undefined) updates.status = body.status
-  if (body.rows_done !== undefined) updates.rows_done = body.rows_done
-  if (body.valid_count !== undefined) updates.valid_count = body.valid_count
-  if (body.not_found_count !== undefined) updates.not_found_count = body.not_found_count
-
-  const { error } = await supabase
-    .from('validation_jobs')
-    .update(updates)
-    .eq('id', id)
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true })
+  // valid_count and not_found_count are omitted — migration 004 not yet applied
+  const body = await req.json() as { status?: string; rows_done?: number }
+  try {
+    await jobRepository.patchJob(id, {
+      status:    body.status    as 'pending' | 'processing' | 'complete' | 'error' | undefined,
+      rows_done: body.rows_done,
+    })
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Update failed' }, { status: 500 })
+  }
 }
