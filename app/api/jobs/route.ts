@@ -40,17 +40,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from('validation_jobs')
-    .select(`
-      id,
-      type,
-      status,
-      file_name,
-      row_count,
-      rows_done,
-      input_query,
-      created_at,
-      validation_results ( confidence_score )
-    `)
+    .select('id, type, status, file_name, row_count, rows_done, valid_count, not_found_count, input_query, created_at')
     .eq('org_id', scopeId)
     .order('created_at', { ascending: false })
 

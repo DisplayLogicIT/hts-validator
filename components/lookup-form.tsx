@@ -61,16 +61,30 @@ export function LookupForm() {
           Part Number or Description
         </label>
         <form onSubmit={handleSubmit} className="flex gap-2">
-          <input
-            id="hts-query"
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="e.g. MIL-C-5015 circular connector, aluminum shell"
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-lg h-9 px-3 text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-            style={{ fontFamily: 'var(--font-plex-sans)' }}
-            disabled={loading}
-          />
+          <div className="relative flex-1">
+            <input
+              id="hts-query"
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="e.g. MIL-C-5015 circular connector, aluminum shell"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg h-9 px-3 text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent pr-7"
+              style={{ fontFamily: 'var(--font-plex-sans)' }}
+              disabled={loading}
+            />
+            {(query || result) && !loading && (
+              <button
+                type="button"
+                onClick={() => { setQuery(''); setResult(null); setError(null) }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             type="submit"
             disabled={loading || !query.trim()}
