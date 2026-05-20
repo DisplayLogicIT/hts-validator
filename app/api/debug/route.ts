@@ -9,7 +9,7 @@ export async function GET() {
 
   // 1. Env vars present?
   report.env = {
-    NEXT_PUBLIC_SUPABASE_URL:    !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_URL:    process.env.NEXT_PUBLIC_SUPABASE_URL ?? null,
     SUPABASE_SERVICE_ROLE_KEY:   !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     CLERK_SECRET_KEY:            !!process.env.CLERK_SECRET_KEY,
@@ -36,6 +36,13 @@ export async function GET() {
     } else {
       report.supabase = { ok: true, rowCount: data?.length ?? 0 }
     }
+
+    // Show actual columns so we can verify migrations
+    const { data: cols } = await supabase
+      .rpc('sql', { query: "SELECT column_name FROM information_schema.columns WHERE table_name='validation_jobs' AND table_schema='public' ORDER BY ordinal_position" })
+      .throwOnError()
+      .catch(() => ({ data: null }))
+    report.columns = cols ?? 'rpc unavailable — check Supabase URL above'
   } catch (e) {
     report.supabase = { ok: false, error: e instanceof Error ? e.message : JSON.stringify(e) }
   }
