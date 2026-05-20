@@ -20,6 +20,7 @@ interface ValidationResult {
 }
 
 type UploadState = 'idle' | 'parsing' | 'parsed' | 'classifying' | 'complete'
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 export function UploadForm() {
   const [uploadState, setUploadState] = useState<UploadState>('idle')
@@ -30,6 +31,7 @@ export function UploadForm() {
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [results, setResults] = useState<ValidationResult[]>([])
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveState, setSaveState] = useState<SaveState>('idle')
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Restore from cache on mount
@@ -42,12 +44,14 @@ export function UploadForm() {
         detection: DetectionInfo
         results: ValidationResult[]
         progress: { done: number; total: number }
+        saveState?: SaveState
       }
       if (cache.uploadState === 'complete') {
         setUploadState('complete')
         setDetection(cache.detection)
         setResults(cache.results)
         setProgress(cache.progress)
+        if (cache.saveState) setSaveState(cache.saveState)
       }
     } catch { /* ignore corrupt cache */ }
   }, [])
@@ -57,9 +61,9 @@ export function UploadForm() {
     if (uploadState === 'idle') { localStorage.removeItem(CACHE_KEY); return }
     if (uploadState !== 'complete') return
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, detection, results, progress }))
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ uploadState, detection, results, progress, saveState }))
     } catch { /* storage quota exceeded */ }
-  }, [uploadState, detection, results, progress])
+  }, [uploadState, detection, results, progress, saveState])
 
   async function handleFile(file: File) {
     setParseError(null)
@@ -96,16 +100,8 @@ export function UploadForm() {
   async function startValidation() {
     if (!rows.length || !detection) return
     setUploadState('classifying')
-    setSaveError(null)
     setProgress({ done: 0, total: rows.length })
     setResults([])
-
-    const jobRes = await fetch('/api/jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_name: detection.fileName, row_count: rows.length }),
-    })
-    const { id: jobId = null } = (await jobRes.json()) as { id?: string }
 
     const accumulated: (ValidationResult | null)[] = Array(rows.length).fill(null)
 
@@ -116,7 +112,7 @@ export function UploadForm() {
           const res = await fetch('/api/validate-hts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hts_code: row.htsCode, ...(jobId ? { job_id: jobId } : {}), row_index: i }),
+            body: JSON.stringify({ hts_code: row.htsCode, row_index: i }),
           })
           const data = (await res.json()) as { valid?: boolean; description?: string; duty_rate?: string | null; error?: string }
           accumulated[i] = {
@@ -142,42 +138,6 @@ export function UploadForm() {
       },
     )
 
-    const validCount    = accumulated.filter((r): r is ValidationResult => r !== null && r.valid).length
-    const notFoundCount = accumulated.filter((r): r is ValidationResult => r !== null && !r.valid).length
-
-    if (jobId) {
-      await fetch(`/api/jobs/${jobId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'complete', rows_done: rows.length, valid_count: validCount, not_found_count: notFoundCount }),
-      })
-
-      const partsPayload = accumulated
-        .filter((r): r is ValidationResult => r !== null)
-        .map((r) => ({
-          part_number: r.label || r.htsCode,
-          description: r.csvDesc || null,
-          hts_code: r.htsCode,
-          validation_status: (r.status === 'error' ? 'error' : r.valid ? 'valid' : 'not_found') as 'valid' | 'not_found' | 'error',
-          usitc_description: r.description || undefined,
-          duty_rate: r.dutyRate ?? undefined,
-          job_id: jobId,
-        }))
-
-      if (partsPayload.length > 0) {
-        await fetch('/api/parts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parts: partsPayload }),
-        }).then(async (res) => {
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({})) as { error?: string }
-            setSaveError(`Validated but failed to save to catalog: ${err.error ?? res.statusText}`)
-          }
-        }).catch(() => setSaveError('Validated but could not reach the server to save results.'))
-      }
-    }
-
     setUploadState('complete')
   }
 
@@ -198,6 +158,43 @@ export function UploadForm() {
     XLSX.writeFile(wb, `hts-validation-${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
 
+  async function saveToHistory() {
+    if (!detection || results.length === 0) return
+    setSaveState('saving')
+    setSaveError(null)
+    try {
+      const res = await fetch('/api/jobs/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_name: detection.fileName,
+          row_count: results.length,
+          results: results.map((r) => ({
+            row_index: r.rowIndex,
+            hts_code: r.htsCode,
+            valid: r.valid,
+            description: r.description,
+            duty_rate: r.dutyRate,
+            status: r.status,
+            error: r.error,
+            label: r.label,
+            csv_desc: r.csvDesc,
+          })),
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string }
+        setSaveState('error')
+        setSaveError(`Failed to save to history: ${err.error ?? res.statusText}`)
+        return
+      }
+      setSaveState('saved')
+    } catch {
+      setSaveState('error')
+      setSaveError('Could not reach the server to save results.')
+    }
+  }
+
   function reset() {
     localStorage.removeItem(CACHE_KEY)
     setUploadState('idle')
@@ -206,6 +203,7 @@ export function UploadForm() {
     setResults([])
     setParseError(null)
     setSaveError(null)
+    setSaveState('idle')
     setProgress({ done: 0, total: 0 })
   }
 
@@ -302,13 +300,27 @@ export function UploadForm() {
             <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
               <div>
                 <span className="text-[11px] font-semibold text-green-700">✓ Complete — {progress.total} codes checked</span>
-                <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found · saved to catalog</span>
+                <span className="text-[10px] text-slate-500 ml-3">{validCount} valid · {notFoundCount} not found</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button onClick={reset} className="flex items-center gap-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-600 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.75" /></svg>
                   Start Over
                 </button>
+                {saveState === 'saved' ? (
+                  <span className="flex items-center gap-1.5 text-green-700 text-[11px] font-medium px-3 py-1.5">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><polyline points="20 6 9 17 4 12" /></svg>
+                    Saved
+                  </span>
+                ) : (
+                  <button onClick={saveToHistory} disabled={saveState === 'saving'} className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
+                    {saveState === 'saving' ? (
+                      <><svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={2} /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg> Saving…</>
+                    ) : (
+                      <><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg> Save to History</>
+                    )}
+                  </button>
+                )}
                 <button onClick={downloadResults} className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                   Download (.xlsx)

@@ -128,6 +128,34 @@ async function createValidationResult(data: ValidationResultCreate): Promise<voi
   if (error) console.error('createValidationResult:', error.message)
 }
 
+interface BulkResult {
+  row_index: number
+  hts_code: string
+  valid: boolean
+  description: string
+  duty_rate: string | null
+  status: 'done' | 'error'
+  error?: string
+  label: string
+  csv_desc: string
+}
+
+async function bulkInsertResults(jobId: string, results: BulkResult[]): Promise<void> {
+  const supabase = createSupabaseAdminClient()
+  const rows = results.map((r) => ({
+    job_id:           jobId,
+    input_text:       r.label || r.hts_code,
+    hts_code:         r.valid ? r.hts_code : null,
+    hts_description:  r.description || null,
+    confidence_score: r.valid ? 1.0 : 0.0,
+    source_url:       null,
+    raw_response:     { valid: r.valid, description: r.description, duty_rate: r.duty_rate, status: r.status, error: r.error },
+    row_index:        r.row_index,
+  }))
+  const { error } = await supabase.from('validation_results').insert(rows)
+  if (error) throw error
+}
+
 async function listResultsGroupedByJob(scopeId: string, status: 'valid' | 'not_found'): Promise<JobWithResults[]> {
   const supabase = createSupabaseAdminClient()
   const { data: jobs, error: jobsError } = await supabase
@@ -161,5 +189,6 @@ export const jobRepository = {
   getJobOwnerId,
   patchJob,
   createValidationResult,
+  bulkInsertResults,
   listResultsGroupedByJob,
 }

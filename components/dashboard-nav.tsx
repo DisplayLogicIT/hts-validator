@@ -146,6 +146,16 @@ export function DashboardNav() {
           </span>
         </div>
       ))}
+
+      <div className="mt-auto px-2.5 pt-4 pb-1">
+        <span
+          className="text-[9px] font-mono select-none"
+          style={{ color: 'rgba(71,85,105,0.55)' }}
+          title="Build version — changes with every deploy"
+        >
+          {process.env.NEXT_PUBLIC_APP_VERSION}
+        </span>
+      </div>
     </nav>
   )
 }
