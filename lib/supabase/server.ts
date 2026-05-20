@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Strips a UTF-8 BOM (U+FEFF) that can sneak in when env vars are pasted from
+// certain text editors or copied from UTF-16 encoded files.
+const stripBOM = (s: string) => s.replace(/^﻿/, '').trim()
+
 /**
  * Server-side Supabase client.
  *
@@ -8,8 +12,8 @@ import { createClient } from '@supabase/supabase-js'
  * SUPABASE_SERVICE_ROLE_KEY and must never be called from client code.
  */
 export function createSupabaseServerClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const url = stripBOM(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '')
+  const anonKey = stripBOM(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '')
   if (!url || !anonKey) {
     throw new Error(
       'Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY',
@@ -24,8 +28,8 @@ export function createSupabaseServerClient() {
  * Admin (service-role) Supabase client. Bypasses RLS — server-only.
  */
 export function createSupabaseAdminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const url = stripBOM(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '')
+  const serviceKey = stripBOM(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '')
   if (!url || !serviceKey) {
     throw new Error(
       'Missing Supabase admin env vars: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY',
