@@ -89,7 +89,7 @@ async function listJobs(scopeId: string): Promise<Job[]> {
     .select('id, type, status, file_name, row_count, rows_done, input_query, created_at')
     .eq('org_id', scopeId)
     .order('created_at', { ascending: false })
-  if (error) throw error
+  if (error) throw new Error(error.message)
   return (data ?? []) as Job[]
 }
 
@@ -110,7 +110,7 @@ async function patchJob(id: string, updates: JobPatch): Promise<void> {
   if (updates.status    !== undefined) row.status    = updates.status
   if (updates.rows_done !== undefined) row.rows_done = updates.rows_done
   const { error } = await supabase.from('validation_jobs').update(row).eq('id', id)
-  if (error) throw error
+  if (error) throw new Error(error.message)
 }
 
 async function createValidationResult(data: ValidationResultCreate): Promise<void> {
@@ -153,7 +153,7 @@ async function bulkInsertResults(jobId: string, results: BulkResult[]): Promise<
     row_index:        r.row_index,
   }))
   const { error } = await supabase.from('validation_results').insert(rows)
-  if (error) throw error
+  if (error) throw new Error(error.message)
 }
 
 async function listResultsGroupedByJob(scopeId: string, status: 'valid' | 'not_found'): Promise<JobWithResults[]> {
