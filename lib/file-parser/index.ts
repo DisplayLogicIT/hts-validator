@@ -19,14 +19,34 @@ export interface ParseResult {
   detection: DetectionInfo
 }
 
-const HTS_KEYWORDS   = ['hts', 'tariff', 'harmonized', 'htsus', 'hs']
+// schedule_b listed before generic 'hs' so the two-char suffix doesn't steal priority
+const HTS_KEYWORDS   = ['hts', 'tariff', 'harmonized', 'htsus', 'schedule_b', 'scheduleb', 'schedule b', 'hs']
 const LABEL_KEYWORDS = ['partnumber', 'part_number', 'part number', 'nsn', 'pn', 'p/n', 'item', 'name', 'product']
 const DESC_KEYWORDS  = ['descriptn', 'description', 'desc']
 
-export function detectColumns(headers: string[]): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
+export function detectColumns(headers: string[], sample: Record<string, string>[] = []): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
   const h = headers.map((s) => s.toLowerCase().trim())
-  const htsIdxFound = h.findIndex((c) => HTS_KEYWORDS.some((k) => c.includes(k)))
-  const htsIdx = htsIdxFound === -1 ? 0 : htsIdxFound
+
+  // Collect every column that matches any HTS keyword, with keyword rank (lower = higher priority)
+  const candidates = h.reduce<{ idx: number; rank: number }[]>((acc, col, idx) => {
+    const rank = HTS_KEYWORDS.findIndex((k) => col.includes(k))
+    if (rank !== -1) acc.push({ idx, rank })
+    return acc
+  }, [])
+
+  let htsIdx = 0
+  if (candidates.length > 0) {
+    // Count non-empty values in a sample to prefer the column that actually has data
+    const slice = sample.slice(0, 200)
+    const ranked = candidates.map((c) => ({
+      ...c,
+      filled: slice.filter((row) => String(row[headers[c.idx]] ?? '').trim().length > 0).length,
+    }))
+    // Most filled first; break ties by keyword rank (lower = higher priority keyword)
+    ranked.sort((a, b) => b.filled - a.filled || a.rank - b.rank)
+    htsIdx = ranked[0].idx
+  }
+
   const labelIdxFound = h.findIndex((c, i) => i !== htsIdx && LABEL_KEYWORDS.some((k) => c.includes(k)))
   const descIdxFound = h.findIndex((c, i) => {
     if (i === htsIdx) return false
@@ -42,7 +62,7 @@ export function detectColumns(headers: string[]): { htsIdx: number; labelIdx: nu
 
 function buildResult(data: Record<string, string>[], headers: string[], fileName: string): ParseResult {
   if (data.length === 0) throw new Error('No rows found. Make sure the file has a header row and data rows.')
-  const { htsIdx, labelIdx, descIdx } = detectColumns(headers)
+  const { htsIdx, labelIdx, descIdx } = detectColumns(headers, data)
   const htsCol   = headers[htsIdx]
   const labelCol = labelIdx !== null ? headers[labelIdx] : null
   const descCol  = descIdx  !== null ? headers[descIdx]  : null
@@ -54,7 +74,7 @@ function buildResult(data: Record<string, string>[], headers: string[], fileName
     }))
     .filter((r) => r.htsCode.length > 0)
   if (rows.length === 0) {
-    throw new Error(`No HTS codes found in column "${htsCol}". Make sure the file has a header row with a column named HTS, Tariff, or HTSUS.`)
+    throw new Error(`No HTS codes found in column "${htsCol}". Make sure the file has a column named HTS, HTSUS, Tariff, or Schedule_B with populated values.`)
   }
   return { rows, detection: { htsCol, labelCol, descCol, fileName, totalRows: rows.length } }
 }

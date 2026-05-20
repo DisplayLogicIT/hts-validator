@@ -19,7 +19,7 @@ interface ValidationResult {
   error?: string
 }
 
-type UploadState = 'idle' | 'parsed' | 'classifying' | 'complete'
+type UploadState = 'idle' | 'parsing' | 'parsed' | 'classifying' | 'complete'
 
 export function UploadForm() {
   const [uploadState, setUploadState] = useState<UploadState>('idle')
@@ -63,6 +63,7 @@ export function UploadForm() {
 
   async function handleFile(file: File) {
     setParseError(null)
+    setUploadState('parsing')
     try {
       const { rows: parsed, detection: info } = await parseFile(file)
       setRows(parsed)
@@ -70,6 +71,7 @@ export function UploadForm() {
       setUploadState('parsed')
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'Failed to parse file')
+      setUploadState('idle')
     }
   }
 
@@ -140,12 +142,40 @@ export function UploadForm() {
       },
     )
 
+    const validCount    = accumulated.filter((r): r is ValidationResult => r !== null && r.valid).length
+    const notFoundCount = accumulated.filter((r): r is ValidationResult => r !== null && !r.valid).length
+
     if (jobId) {
       await fetch(`/api/jobs/${jobId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'complete', rows_done: rows.length }),
+        body: JSON.stringify({ status: 'complete', rows_done: rows.length, valid_count: validCount, not_found_count: notFoundCount }),
       })
+
+      const partsPayload = accumulated
+        .filter((r): r is ValidationResult => r !== null)
+        .map((r) => ({
+          part_number: r.label || r.htsCode,
+          description: r.csvDesc || null,
+          hts_code: r.htsCode,
+          validation_status: (r.status === 'error' ? 'error' : r.valid ? 'valid' : 'not_found') as 'valid' | 'not_found' | 'error',
+          usitc_description: r.description || undefined,
+          duty_rate: r.dutyRate ?? undefined,
+          job_id: jobId,
+        }))
+
+      if (partsPayload.length > 0) {
+        await fetch('/api/parts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parts: partsPayload }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({})) as { error?: string }
+            setSaveError(`Validated but failed to save to catalog: ${err.error ?? res.statusText}`)
+          }
+        }).catch(() => setSaveError('Validated but could not reach the server to save results.'))
+      }
     }
 
     setUploadState('complete')
@@ -185,23 +215,33 @@ export function UploadForm() {
   return (
     <div className="flex flex-col gap-4">
 
-      {uploadState === 'idle' && (
+      {(uploadState === 'idle' || uploadState === 'parsing') && (
         <>
-          <div
-            onDrop={handleDrop} onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave}
-            onClick={() => inputRef.current?.click()}
-            className={['border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors select-none',
-              isDragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50'].join(' ')}
-          >
-            <svg className={`w-10 h-10 ${isDragOver ? 'text-blue-400' : 'text-slate-300'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            <div className="text-center">
-              <p className="text-sm font-semibold text-slate-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>Drop XLSX or CSV here</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">File must have an HTS code column · max 10 MB</p>
+          {uploadState === 'parsing' ? (
+            <div className="border-2 border-dashed border-blue-300 bg-blue-50 rounded-xl p-12 flex flex-col items-center justify-center gap-3 select-none">
+              <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={2} />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <p className="text-[12px] font-semibold text-blue-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>Reading file…</p>
             </div>
-            <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileInput} />
-          </div>
+          ) : (
+            <div
+              onDrop={handleDrop} onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave}
+              onClick={() => inputRef.current?.click()}
+              className={['border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors select-none',
+                isDragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50'].join(' ')}
+            >
+              <svg className={`w-10 h-10 ${isDragOver ? 'text-blue-400' : 'text-slate-300'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-700" style={{ fontFamily: 'var(--font-plex-sans)' }}>Drop XLSX or CSV here</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">File must have an HTS or Schedule B code column</p>
+              </div>
+              <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileInput} />
+            </div>
+          )}
           {parseError && (
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               <p className="text-[11px] font-semibold text-red-700 mb-0.5">Upload failed</p>
