@@ -13,6 +13,26 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.0] — 2026-05-21
+### Changed
+- **Scan now uses part description, not the code** — the initial upload already  
+  tried the exact code and it failed; rescanning the same code would give the  
+  same result. Instead, `POST /api/results/:id/scan` now reads  
+  `raw_response.description` (the original CSV description column) and calls  
+  `searchHts(description)` against `hts.usitc.gov`. If USITC returns a match  
+  for that description, the result is definitively correct.
+- **Description column** added to the Unvalidated table — shows the part  
+  description from the original document so you can see what is being searched
+- **Scan All progress bar** matches the upload page exactly — gradient fill,  
+  `done / total · N validated` counter, Stop button, completion banner with  
+  "Re-scan remaining" option
+- `no_description` state — rows without a CSV description show  
+  "No description to search" and disable the Scan button
+- `not_found` state — rows where description search returns zero USITC  
+  results are flagged "Not in USITC" (genuinely absent from the schedule)
+
+---
+
 ## [1.3.0] — 2026-05-21
 ### Added
 - **Unvalidated page — USITC scan** — each unvalidated row now has a "Scan"  

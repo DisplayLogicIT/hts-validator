@@ -1,7 +1,7 @@
 import { auth } from '@clerk/nextjs/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { jobRepository } from '@/lib/db/jobs'
-import { lookupHtsCode } from '@/lib/hts/usitc'
+import { searchHts } from '@/lib/hts/usitc'
 
 export async function POST(
   _req: NextRequest,
@@ -18,23 +18,32 @@ export async function POST(
     if (!result) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     if (result.org_id !== scopeId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-    const lookup = await lookupHtsCode(result.input_text)
-
-    if (lookup.valid) {
-      await jobRepository.patchValidationResult(id, {
-        hts_code:         lookup.hts_code,
-        hts_description:  lookup.description,
-        confidence_score: 1.0,
-        source_url:       lookup.source_url,
-      })
+    // Extract description from the original CSV row stored in raw_response
+    const description = result.raw_response?.description as string | undefined
+    if (!description || description.trim().length < 4) {
+      return NextResponse.json({ valid: false, reason: 'no_description' })
     }
 
+    // Search USITC by description — if it's there, it will match
+    const candidates = await searchHts(description.trim())
+    if (!candidates.length) {
+      return NextResponse.json({ valid: false, reason: 'no_match' })
+    }
+
+    const best = candidates[0]
+    await jobRepository.patchValidationResult(id, {
+      hts_code:         best.hts_code,
+      hts_description:  best.description,
+      confidence_score: 1.0,
+      source_url:       best.source_url,
+    })
+
     return NextResponse.json({
-      valid:       lookup.valid,
-      hts_code:    lookup.hts_code,
-      description: lookup.description,
-      duty_rate:   lookup.duty_rate,
-      source_url:  lookup.source_url,
+      valid:       true,
+      hts_code:    best.hts_code,
+      description: best.description,
+      duty_rate:   best.duty_rate,
+      source_url:  best.source_url,
     })
   } catch (err) {
     console.error('POST /api/results/[id]/scan:', err)

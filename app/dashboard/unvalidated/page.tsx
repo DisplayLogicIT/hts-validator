@@ -7,6 +7,7 @@ interface ResultRow {
   input_text: string
   hts_code: string | null
   hts_description: string | null
+  raw_response: { description?: string } | null
 }
 
 interface JobGroup {
@@ -18,7 +19,7 @@ interface JobGroup {
   results: ResultRow[]
 }
 
-type RowScanState = 'idle' | 'scanning' | 'found' | 'not_found' | 'error'
+type RowScanState = 'idle' | 'scanning' | 'found' | 'not_found' | 'no_description' | 'error'
 
 interface ScanResult {
   state: RowScanState
@@ -34,6 +35,8 @@ interface BatchProgress {
   running: boolean
 }
 
+const SCAN_CONCURRENCY = 5
+
 function formatDate(iso: string): string {
   const d = new Date(iso)
   const now = new Date()
@@ -42,8 +45,6 @@ function formatDate(iso: string): string {
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
 }
-
-const BATCH_CONCURRENCY = 5
 
 export default function UnvalidatedPage() {
   const [jobs, setJobs] = useState<JobGroup[]>([])
@@ -74,15 +75,27 @@ export default function UnvalidatedPage() {
     setScanState((p) => ({ ...p, [resultId]: { state: 'scanning' } }))
     try {
       const res = await fetch(`/api/results/${resultId}/scan`, { method: 'POST' })
-      const data = await res.json() as { valid?: boolean; hts_code?: string; description?: string; duty_rate?: string | null; error?: string }
+      const data = await res.json() as {
+        valid?: boolean
+        hts_code?: string
+        description?: string
+        duty_rate?: string | null
+        reason?: string
+        error?: string
+      }
       if (!res.ok) {
         const s: ScanResult = { state: 'error' }
         setScanState((p) => ({ ...p, [resultId]: s }))
         return s
       }
-      const s: ScanResult = data.valid
-        ? { state: 'found', hts_code: data.hts_code, description: data.description, duty_rate: data.duty_rate }
-        : { state: 'not_found' }
+      let s: ScanResult
+      if (data.valid) {
+        s = { state: 'found', hts_code: data.hts_code, description: data.description, duty_rate: data.duty_rate }
+      } else if (data.reason === 'no_description') {
+        s = { state: 'no_description' }
+      } else {
+        s = { state: 'not_found' }
+      }
       setScanState((p) => ({ ...p, [resultId]: s }))
       return s
     } catch {
@@ -97,7 +110,7 @@ export default function UnvalidatedPage() {
       const s = scanState[r.id]?.state
       return !s || s === 'not_found' || s === 'error'
     })
-    if (pending.length === 0) return
+    if (!pending.length) return
 
     abortRefs.current[job.id] = false
     setBatchProgress((p) => ({ ...p, [job.id]: { total: pending.length, done: 0, found: 0, running: true } }))
@@ -118,8 +131,9 @@ export default function UnvalidatedPage() {
       }
     }
 
-    const workers = Array.from({ length: Math.min(BATCH_CONCURRENCY, pending.length) }, () => worker())
-    await Promise.all(workers)
+    await Promise.all(
+      Array.from({ length: Math.min(SCAN_CONCURRENCY, pending.length) }, () => worker())
+    )
     setBatchProgress((p) => ({ ...p, [job.id]: { ...p[job.id], running: false } }))
   }
 
@@ -134,11 +148,13 @@ export default function UnvalidatedPage() {
         <div>
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Unvalidated</h1>
           <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>
-            Codes not found in USITC · scan to re-check against hts.usitc.gov
+            Codes not matched in USITC · Scan All uses part description to find the correct code
           </p>
         </div>
         <span className="text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2.5 py-1">
-          {loading ? <span className="inline-block w-14 h-2 bg-amber-200 rounded animate-pulse" /> : `${totalUnvalidated} need attention`}
+          {loading
+            ? <span className="inline-block w-14 h-2 bg-amber-200 rounded animate-pulse" />
+            : `${totalUnvalidated} need attention`}
         </span>
       </div>
 
@@ -177,7 +193,9 @@ export default function UnvalidatedPage() {
 
             return (
               <div key={job.id} className="data-card overflow-hidden">
-                <div className="w-full flex items-center gap-3 px-4 py-3.5">
+
+                {/* Job header */}
+                <div className="flex items-center gap-3 px-4 py-3.5">
                   <button
                     onClick={() => setExpandedJob(isOpen ? null : job.id)}
                     className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
@@ -190,46 +208,24 @@ export default function UnvalidatedPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{label}</p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(job.created_at)}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(job.created_at)} · {job.results.length} parts</p>
                     </div>
                   </button>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    {/* Batch scan progress / button */}
-                    {bp?.running ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-[10px] text-blue-600 font-medium">
-                          {bp.done}/{bp.total} · {bp.found} found
-                        </span>
-                        <button
-                          onClick={() => stopScan(job.id)}
-                          className="text-[9px] text-slate-400 hover:text-red-500 transition-colors ml-1"
-                        >
-                          Stop
-                        </button>
-                      </div>
-                    ) : bp && !bp.running ? (
-                      <span className="text-[10px] text-slate-500">
-                        {bp.found} found · {bp.total - bp.found} still not found
-                      </span>
-                    ) : null}
-
+                    <span className="text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">
+                      {job.results.length} not found
+                    </span>
                     <button
                       onClick={() => { setExpandedJob(job.id); scanAll(job) }}
                       disabled={bp?.running || pendingCount === 0}
-                      className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-40 disabled:cursor-not-allowed bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-2 py-1 transition-colors flex items-center gap-1"
+                      className="flex items-center gap-1.5 text-[10.5px] font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-2.5 py-1.5 transition-colors"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                       </svg>
                       Scan All
                     </button>
-
-                    <span className="text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">
-                      {job.results.length} not found
-                    </span>
-
                     <button onClick={() => setExpandedJob(isOpen ? null : job.id)}>
                       <svg
                         className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
@@ -243,13 +239,66 @@ export default function UnvalidatedPage() {
 
                 {isOpen && (
                   <div className="border-t border-slate-100">
+
+                    {/* Progress bar — matches upload form style */}
+                    {bp?.running && (
+                      <div className="px-4 py-3 bg-blue-50/60 border-b border-blue-100">
+                        <div className="flex justify-between items-center mb-1.5">
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            Scanning against USITC…
+                          </span>
+                          <div className="flex items-center gap-3">
+                            <span className="text-[11px] text-slate-500">
+                              {bp.done} / {bp.total} · <span className="text-green-700 font-semibold">{bp.found} validated</span>
+                            </span>
+                            <button
+                              onClick={() => stopScan(job.id)}
+                              className="text-[10px] font-medium text-slate-400 hover:text-red-500 transition-colors"
+                            >
+                              Stop
+                            </button>
+                          </div>
+                        </div>
+                        <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-blue-700 to-blue-400 rounded-full transition-all duration-300"
+                            style={{ width: `${bp.total > 0 ? (bp.done / bp.total) * 100 : 0}%` }}
+                          />
+                        </div>
+                        <p className="text-[9px] text-slate-400 mt-1.5">
+                          Running {SCAN_CONCURRENCY} description lookups at a time · searching hts.usitc.gov
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Completion banner */}
+                    {bp && !bp.running && bp.done > 0 && (
+                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-600">
+                          Scan complete ·{' '}
+                          <span className="text-green-700 font-semibold">{bp.found} validated</span>
+                          {' '}· {bp.total - bp.found} still not found
+                        </span>
+                        {pendingCount > 0 && (
+                          <button
+                            onClick={() => scanAll(job)}
+                            className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 transition-colors"
+                          >
+                            Re-scan remaining
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Results table */}
                     <table className="w-full border-collapse">
                       <thead>
                         <tr className="bg-slate-50">
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Input Code</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">USITC Result</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Part Description</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">USITC Match</td>
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Duty</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide w-20">Action</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide w-16">Action</td>
                         </tr>
                       </thead>
                       <tbody>
@@ -257,55 +306,77 @@ export default function UnvalidatedPage() {
                           const scan = scanState[r.id]
                           const isScanning = scan?.state === 'scanning'
                           const isFound = scan?.state === 'found'
+                          const csvDesc = r.raw_response?.description ?? ''
 
                           return (
                             <tr
                               key={r.id}
-                              className={`border-t border-slate-100 transition-colors ${isFound ? 'bg-green-50/40' : 'hover:bg-slate-50/40'}`}
+                              className={`border-t border-slate-100 transition-colors ${isFound ? 'bg-green-50/50' : 'hover:bg-slate-50/40'}`}
                             >
+                              {/* Input code */}
                               <td className="px-4 py-2.5">
-                                <p className="text-[11px] font-medium text-slate-900 truncate max-w-[200px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
+                                <p className="text-[11px] font-medium text-slate-800 truncate max-w-[120px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
                                   {r.input_text}
                                 </p>
                               </td>
+
+                              {/* Part description from CSV */}
+                              <td className="px-4 py-2.5 max-w-[200px]">
+                                {csvDesc
+                                  ? <p className="text-[10.5px] text-slate-600 truncate">{csvDesc}</p>
+                                  : <span className="text-[9.5px] text-slate-300 italic">No description</span>}
+                              </td>
+
+                              {/* USITC match result */}
                               <td className="px-4 py-2.5">
                                 {!scan || scan.state === 'idle' ? (
                                   <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found</span>
                                 ) : isScanning ? (
                                   <span className="flex items-center gap-1.5 text-[10px] text-slate-500">
                                     <span className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin" />
-                                    Scanning USITC…
+                                    Searching…
                                   </span>
                                 ) : isFound ? (
                                   <div>
                                     <p className="text-[10.5px] font-semibold text-green-700" style={{ fontFamily: 'var(--font-plex-mono)' }}>{scan.hts_code}</p>
-                                    <p className="text-[9.5px] text-slate-500 truncate max-w-[220px] mt-0.5">{scan.description}</p>
+                                    <p className="text-[9.5px] text-slate-500 truncate max-w-[180px] mt-0.5">{scan.description}</p>
                                   </div>
+                                ) : scan.state === 'no_description' ? (
+                                  <span className="text-[9px] bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">No description to search</span>
                                 ) : scan.state === 'not_found' ? (
-                                  <span className="text-[9px] bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">Still Not Found</span>
+                                  <span className="text-[9px] bg-red-50 text-red-600 border border-red-100 rounded px-1.5 py-0.5 font-semibold">Not in USITC</span>
                                 ) : (
-                                  <span className="text-[9px] bg-red-50 text-red-600 border border-red-100 rounded px-1.5 py-0.5 font-semibold">Scan Error</span>
+                                  <span className="text-[9px] bg-red-50 text-red-600 border border-red-100 rounded px-1.5 py-0.5 font-semibold">Scan error</span>
                                 )}
                               </td>
+
+                              {/* Duty rate */}
                               <td className="px-4 py-2.5">
                                 <span className="text-[10.5px] text-slate-600">
                                   {isFound ? (scan.duty_rate ?? '—') : '—'}
                                 </span>
                               </td>
+
+                              {/* Per-row scan button */}
                               <td className="px-4 py-2.5">
                                 <button
                                   onClick={() => scanOne(r.id)}
-                                  disabled={isScanning || isFound}
+                                  disabled={isScanning || isFound || !csvDesc}
+                                  title={!csvDesc ? 'No description available' : isFound ? 'Already validated' : 'Scan this part'}
                                   className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
                                 >
                                   {isScanning ? (
                                     <span className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : isFound ? (
+                                    <svg className="w-3 h-3 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
                                   ) : (
                                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                     </svg>
                                   )}
-                                  {isFound ? 'Found' : 'Scan'}
+                                  {isFound ? '✓' : 'Scan'}
                                 </button>
                               </td>
                             </tr>

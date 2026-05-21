@@ -132,16 +132,22 @@ async function permanentDeleteJob(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-async function getValidationResult(id: string): Promise<{ id: string; job_id: string; input_text: string; org_id: string } | null> {
+async function getValidationResult(id: string): Promise<{ id: string; job_id: string; input_text: string; org_id: string; raw_response: Record<string, unknown> | null } | null> {
   const supabase = createSupabaseAdminClient()
   const { data } = await supabase
     .from('validation_results')
-    .select('id, job_id, input_text, validation_jobs(org_id)')
+    .select('id, job_id, input_text, raw_response, validation_jobs(org_id)')
     .eq('id', id)
     .single()
   if (!data) return null
   const org = data.validation_jobs as { org_id: string } | null
-  return { id: data.id, job_id: data.job_id, input_text: data.input_text, org_id: org?.org_id ?? '' }
+  return {
+    id: data.id,
+    job_id: data.job_id,
+    input_text: data.input_text,
+    raw_response: data.raw_response as Record<string, unknown> | null,
+    org_id: org?.org_id ?? '',
+  }
 }
 
 async function patchValidationResult(
