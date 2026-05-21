@@ -38,10 +38,14 @@ export async function GET() {
     }
 
     // Show actual columns so we can verify migrations
-    const { data: cols } = await supabase
-      .rpc('sql', { query: "SELECT column_name FROM information_schema.columns WHERE table_name='validation_jobs' AND table_schema='public' ORDER BY ordinal_position" })
-      .throwOnError()
-      .catch(() => ({ data: null }))
+    let cols = null
+    try {
+      const { data } = await supabase
+        .rpc('sql', { query: "SELECT column_name FROM information_schema.columns WHERE table_name='validation_jobs' AND table_schema='public' ORDER BY ordinal_position" })
+      cols = data
+    } catch {
+      // rpc unavailable
+    }
     report.columns = cols ?? 'rpc unavailable — check Supabase URL above'
   } catch (e) {
     report.supabase = { ok: false, error: e instanceof Error ? e.message : JSON.stringify(e) }
