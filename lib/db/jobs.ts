@@ -227,7 +227,7 @@ async function bulkInsertResults(jobId: string, results: BulkResult[]): Promise<
     hts_description:  r.description || null,
     confidence_score: r.valid ? 1.0 : 0.0,
     source_url:       null,
-    raw_response:     { valid: r.valid, description: r.description, duty_rate: r.duty_rate, status: r.status, error: r.error },
+    raw_response:     { valid: r.valid, description: r.description, csv_desc: r.csv_desc, duty_rate: r.duty_rate, status: r.status, error: r.error },
     row_index:        r.row_index,
   }))
   const { error } = await supabase.from('validation_results').insert(rows)

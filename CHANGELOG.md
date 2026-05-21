@@ -13,6 +13,17 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.2] — 2026-05-21
+### Fixed
+- **Scan was always returning "No description"** — `bulkInsertResults` was storing  
+  `r.description` (the USITC description, empty for not-found parts) in `raw_response`  
+  but never storing the original CSV description (`r.csv_desc`). Added `csv_desc` to  
+  the `raw_response` JSON so it persists at save time.
+- Scan endpoint and Unvalidated page now read `raw_response.csv_desc` first,  
+  falling back to `raw_response.description` for records saved before this fix.
+
+---
+
 ## [1.4.1] — 2026-05-21
 ### Fixed
 - TypeScript build error in `lib/db/jobs.ts` — `getValidationResult` joined  

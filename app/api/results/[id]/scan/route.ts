@@ -18,8 +18,8 @@ export async function POST(
     if (!result) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     if (result.org_id !== scopeId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-    // Extract description from the original CSV row stored in raw_response
-    const description = result.raw_response?.description as string | undefined
+    // Extract the original CSV description stored at save time
+    const description = (result.raw_response?.csv_desc ?? result.raw_response?.description) as string | undefined
     if (!description || description.trim().length < 4) {
       return NextResponse.json({ valid: false, reason: 'no_description' })
     }

@@ -7,7 +7,7 @@ interface ResultRow {
   input_text: string
   hts_code: string | null
   hts_description: string | null
-  raw_response: { description?: string } | null
+  raw_response: { csv_desc?: string; description?: string } | null
 }
 
 interface JobGroup {
@@ -306,7 +306,7 @@ export default function UnvalidatedPage() {
                           const scan = scanState[r.id]
                           const isScanning = scan?.state === 'scanning'
                           const isFound = scan?.state === 'found'
-                          const csvDesc = r.raw_response?.description ?? ''
+                          const csvDesc = r.raw_response?.csv_desc ?? r.raw_response?.description ?? ''
 
                           return (
                             <tr
