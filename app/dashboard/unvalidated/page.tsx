@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface ResultRow {
   id: string
@@ -18,6 +18,22 @@ interface JobGroup {
   results: ResultRow[]
 }
 
+type RowScanState = 'idle' | 'scanning' | 'found' | 'not_found' | 'error'
+
+interface ScanResult {
+  state: RowScanState
+  hts_code?: string
+  description?: string
+  duty_rate?: string | null
+}
+
+interface BatchProgress {
+  total: number
+  done: number
+  found: number
+  running: boolean
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso)
   const now = new Date()
@@ -27,11 +43,16 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+const BATCH_CONCURRENCY = 5
+
 export default function UnvalidatedPage() {
   const [jobs, setJobs] = useState<JobGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
+  const [scanState, setScanState] = useState<Record<string, ScanResult>>({})
+  const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgress>>({})
+  const abortRefs = useRef<Record<string, boolean>>({})
 
   useEffect(() => {
     fetch('/api/results?status=not_found')
@@ -44,14 +65,77 @@ export default function UnvalidatedPage() {
       .catch((e: Error) => { setFetchError(e.message); setLoading(false) })
   }, [])
 
-  const totalUnvalidated = jobs.reduce((sum, j) => sum + j.results.length, 0)
+  const totalUnvalidated = jobs.reduce((sum, j) => {
+    const found = j.results.filter((r) => scanState[r.id]?.state === 'found').length
+    return sum + j.results.length - found
+  }, 0)
+
+  async function scanOne(resultId: string): Promise<ScanResult> {
+    setScanState((p) => ({ ...p, [resultId]: { state: 'scanning' } }))
+    try {
+      const res = await fetch(`/api/results/${resultId}/scan`, { method: 'POST' })
+      const data = await res.json() as { valid?: boolean; hts_code?: string; description?: string; duty_rate?: string | null; error?: string }
+      if (!res.ok) {
+        const s: ScanResult = { state: 'error' }
+        setScanState((p) => ({ ...p, [resultId]: s }))
+        return s
+      }
+      const s: ScanResult = data.valid
+        ? { state: 'found', hts_code: data.hts_code, description: data.description, duty_rate: data.duty_rate }
+        : { state: 'not_found' }
+      setScanState((p) => ({ ...p, [resultId]: s }))
+      return s
+    } catch {
+      const s: ScanResult = { state: 'error' }
+      setScanState((p) => ({ ...p, [resultId]: s }))
+      return s
+    }
+  }
+
+  async function scanAll(job: JobGroup) {
+    const pending = job.results.filter((r) => {
+      const s = scanState[r.id]?.state
+      return !s || s === 'not_found' || s === 'error'
+    })
+    if (pending.length === 0) return
+
+    abortRefs.current[job.id] = false
+    setBatchProgress((p) => ({ ...p, [job.id]: { total: pending.length, done: 0, found: 0, running: true } }))
+
+    let idx = 0
+    let found = 0
+
+    async function worker() {
+      while (idx < pending.length) {
+        if (abortRefs.current[job.id]) break
+        const row = pending[idx++]
+        const result = await scanOne(row.id)
+        if (result.state === 'found') found++
+        setBatchProgress((p) => ({
+          ...p,
+          [job.id]: { total: pending.length, done: (p[job.id]?.done ?? 0) + 1, found, running: true },
+        }))
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(BATCH_CONCURRENCY, pending.length) }, () => worker())
+    await Promise.all(workers)
+    setBatchProgress((p) => ({ ...p, [job.id]: { ...p[job.id], running: false } }))
+  }
+
+  function stopScan(jobId: string) {
+    abortRefs.current[jobId] = true
+    setBatchProgress((p) => ({ ...p, [jobId]: { ...p[jobId], running: false } }))
+  }
 
   return (
     <div className="flex flex-col h-full">
       <div className="topbar px-6 py-3 shrink-0 flex items-center justify-between">
         <div>
           <h1 className="text-sm font-semibold text-slate-900" style={{ fontFamily: 'var(--font-plex-sans)' }}>Unvalidated</h1>
-          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>Codes not found in USITC · review and re-submit with a corrected code</p>
+          <p className="text-[11px] text-slate-400" style={{ fontFamily: 'var(--font-plex-sans)' }}>
+            Codes not found in USITC · scan to re-check against hts.usitc.gov
+          </p>
         </div>
         <span className="text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2.5 py-1">
           {loading ? <span className="inline-block w-14 h-2 bg-amber-200 rounded animate-pulse" /> : `${totalUnvalidated} need attention`}
@@ -85,31 +169,77 @@ export default function UnvalidatedPage() {
           jobs.map((job) => {
             const isOpen = expandedJob === job.id
             const label = job.type === 'batch' ? (job.file_name ?? 'Untitled batch') : (job.input_query ?? 'Single lookup')
+            const bp = batchProgress[job.id]
+            const pendingCount = job.results.filter((r) => {
+              const s = scanState[r.id]?.state
+              return !s || s === 'not_found' || s === 'error'
+            }).length
+
             return (
               <div key={job.id} className="data-card overflow-hidden">
-                <button
-                  onClick={() => setExpandedJob(isOpen ? null : job.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-slate-50/60 transition-colors text-left"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
-                    <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                      <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{label}</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(job.created_at)}</p>
-                  </div>
+                <div className="w-full flex items-center gap-3 px-4 py-3.5">
+                  <button
+                    onClick={() => setExpandedJob(isOpen ? null : job.id)}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
+                      <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] font-semibold text-slate-900 truncate" style={{ fontFamily: 'var(--font-plex-sans)' }}>{label}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(job.created_at)}</p>
+                    </div>
+                  </button>
+
                   <div className="flex items-center gap-2 shrink-0">
+                    {/* Batch scan progress / button */}
+                    {bp?.running ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-[10px] text-blue-600 font-medium">
+                          {bp.done}/{bp.total} · {bp.found} found
+                        </span>
+                        <button
+                          onClick={() => stopScan(job.id)}
+                          className="text-[9px] text-slate-400 hover:text-red-500 transition-colors ml-1"
+                        >
+                          Stop
+                        </button>
+                      </div>
+                    ) : bp && !bp.running ? (
+                      <span className="text-[10px] text-slate-500">
+                        {bp.found} found · {bp.total - bp.found} still not found
+                      </span>
+                    ) : null}
+
+                    <button
+                      onClick={() => { setExpandedJob(job.id); scanAll(job) }}
+                      disabled={bp?.running || pendingCount === 0}
+                      className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-40 disabled:cursor-not-allowed bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-2 py-1 transition-colors flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      Scan All
+                    </button>
+
                     <span className="text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">
                       {job.results.length} not found
                     </span>
-                    <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
+
+                    <button onClick={() => setExpandedJob(isOpen ? null : job.id)}>
+                      <svg
+                        className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+                        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
                   </div>
-                </button>
+                </div>
 
                 {isOpen && (
                   <div className="border-t border-slate-100">
@@ -117,22 +247,70 @@ export default function UnvalidatedPage() {
                       <thead>
                         <tr className="bg-slate-50">
                           <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Input Code</td>
-                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Status</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">USITC Result</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide">Duty</td>
+                          <td className="text-[9px] text-slate-400 px-4 py-2.5 font-semibold uppercase tracking-wide w-20">Action</td>
                         </tr>
                       </thead>
                       <tbody>
-                        {job.results.map((r) => (
-                          <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/40 transition-colors">
-                            <td className="px-4 py-2.5">
-                              <p className="text-[11px] font-medium text-slate-900 truncate max-w-[320px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
-                                {r.input_text}
-                              </p>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found in USITC</span>
-                            </td>
-                          </tr>
-                        ))}
+                        {job.results.map((r) => {
+                          const scan = scanState[r.id]
+                          const isScanning = scan?.state === 'scanning'
+                          const isFound = scan?.state === 'found'
+
+                          return (
+                            <tr
+                              key={r.id}
+                              className={`border-t border-slate-100 transition-colors ${isFound ? 'bg-green-50/40' : 'hover:bg-slate-50/40'}`}
+                            >
+                              <td className="px-4 py-2.5">
+                                <p className="text-[11px] font-medium text-slate-900 truncate max-w-[200px]" style={{ fontFamily: 'var(--font-plex-mono)' }}>
+                                  {r.input_text}
+                                </p>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                {!scan || scan.state === 'idle' ? (
+                                  <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-100 rounded px-1.5 py-0.5 font-semibold">Not Found</span>
+                                ) : isScanning ? (
+                                  <span className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                                    <span className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin" />
+                                    Scanning USITC…
+                                  </span>
+                                ) : isFound ? (
+                                  <div>
+                                    <p className="text-[10.5px] font-semibold text-green-700" style={{ fontFamily: 'var(--font-plex-mono)' }}>{scan.hts_code}</p>
+                                    <p className="text-[9.5px] text-slate-500 truncate max-w-[220px] mt-0.5">{scan.description}</p>
+                                  </div>
+                                ) : scan.state === 'not_found' ? (
+                                  <span className="text-[9px] bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">Still Not Found</span>
+                                ) : (
+                                  <span className="text-[9px] bg-red-50 text-red-600 border border-red-100 rounded px-1.5 py-0.5 font-semibold">Scan Error</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <span className="text-[10.5px] text-slate-600">
+                                  {isFound ? (scan.duty_rate ?? '—') : '—'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button
+                                  onClick={() => scanOne(r.id)}
+                                  disabled={isScanning || isFound}
+                                  className="text-[10px] font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+                                >
+                                  {isScanning ? (
+                                    <span className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                  )}
+                                  {isFound ? 'Found' : 'Scan'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>

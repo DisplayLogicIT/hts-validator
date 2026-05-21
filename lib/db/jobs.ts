@@ -132,6 +132,27 @@ async function permanentDeleteJob(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+async function getValidationResult(id: string): Promise<{ id: string; job_id: string; input_text: string; org_id: string } | null> {
+  const supabase = createSupabaseAdminClient()
+  const { data } = await supabase
+    .from('validation_results')
+    .select('id, job_id, input_text, validation_jobs(org_id)')
+    .eq('id', id)
+    .single()
+  if (!data) return null
+  const org = data.validation_jobs as { org_id: string } | null
+  return { id: data.id, job_id: data.job_id, input_text: data.input_text, org_id: org?.org_id ?? '' }
+}
+
+async function patchValidationResult(
+  id: string,
+  updates: { hts_code: string; hts_description: string; confidence_score: number; source_url: string },
+): Promise<void> {
+  const supabase = createSupabaseAdminClient()
+  const { error } = await supabase.from('validation_results').update(updates).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
 async function listJobResults(jobId: string): Promise<GroupedResultRow[]> {
   const supabase = createSupabaseAdminClient()
   const { data, error } = await supabase
@@ -247,4 +268,6 @@ export const jobRepository = {
   bulkInsertResults,
   listResultsGroupedByJob,
   listJobResults,
+  getValidationResult,
+  patchValidationResult,
 }

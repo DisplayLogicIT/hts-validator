@@ -13,6 +13,20 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.3.0] — 2026-05-21
+### Added
+- **Unvalidated page — USITC scan** — each unvalidated row now has a "Scan"  
+  button that re-checks the input code against `hts.usitc.gov` in real time
+- **"Scan All" per batch** — runs up to 5 concurrent USITC lookups with a live  
+  `done/total · N found` progress counter; a Stop button cancels mid-scan
+- **Inline results** — found rows turn green and show the HTS code, USITC  
+  description, and duty rate; still-not-found rows show "Still Not Found"
+- When a code is found the `validation_results` row is updated in the database  
+  (the part moves to Validated on next page load)
+- `POST /api/results/:id/scan` — server-side USITC lookup + DB write
+
+---
+
 ## [1.2.0] — 2026-05-21
 ### Added
 - **History accordion** — each job row expands to show its full results table  
