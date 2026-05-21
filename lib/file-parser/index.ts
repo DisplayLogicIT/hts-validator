@@ -12,6 +12,8 @@ export interface DetectionInfo {
   descCol: string | null
   fileName: string
   totalRows: number
+  skippedInvalid: number
+  truncated: boolean
 }
 
 export interface ParseResult {
@@ -19,10 +21,18 @@ export interface ParseResult {
   detection: DetectionInfo
 }
 
+const MAX_ROWS = 5_000
+
 // schedule_b listed before generic 'hs' so the two-char suffix doesn't steal priority
 const HTS_KEYWORDS   = ['hts', 'tariff', 'harmonized', 'htsus', 'schedule_b', 'scheduleb', 'schedule b', 'hs']
 const LABEL_KEYWORDS = ['partnumber', 'part_number', 'part number', 'nsn', 'pn', 'p/n', 'item', 'name', 'product']
 const DESC_KEYWORDS  = ['descriptn', 'description', 'desc']
+
+// HTS codes are 6–10 digits, optionally separated by periods or hyphens
+function isValidHtsCode(raw: string): boolean {
+  const digits = raw.replace(/[\s.\-]/g, '')
+  return /^\d{6,10}$/.test(digits)
+}
 
 export function detectColumns(headers: string[], sample: Record<string, string>[] = []): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
   const h = headers.map((s) => s.toLowerCase().trim())
@@ -66,17 +76,27 @@ function buildResult(data: Record<string, string>[], headers: string[], fileName
   const htsCol   = headers[htsIdx]
   const labelCol = labelIdx !== null ? headers[labelIdx] : null
   const descCol  = descIdx  !== null ? headers[descIdx]  : null
-  const rows: ParsedRow[] = data
-    .map((row) => ({
-      htsCode: String(row[htsCol]   ?? '').trim(),
-      label:   labelCol ? String(row[labelCol] ?? '').trim() : '',
-      csvDesc: descCol  ? String(row[descCol]  ?? '').trim() : '',
-    }))
-    .filter((r) => r.htsCode.length > 0)
-  if (rows.length === 0) {
-    throw new Error(`No HTS codes found in column "${htsCol}". Make sure the file has a column named HTS, HTSUS, Tariff, or Schedule_B with populated values.`)
+
+  const mapped = data.map((row) => ({
+    htsCode: String(row[htsCol]   ?? '').trim(),
+    label:   labelCol ? String(row[labelCol] ?? '').trim() : '',
+    csvDesc: descCol  ? String(row[descCol]  ?? '').trim() : '',
+  }))
+
+  const valid   = mapped.filter((r) => r.htsCode.length > 0 && isValidHtsCode(r.htsCode))
+  const skippedInvalid = mapped.length - valid.length
+
+  if (valid.length === 0) {
+    throw new Error(`No valid HTS codes found in column "${htsCol}". Codes must be 6–10 digits (e.g. 8471.30.0100).`)
   }
-  return { rows, detection: { htsCol, labelCol, descCol, fileName, totalRows: rows.length } }
+
+  const truncated = valid.length > MAX_ROWS
+  const rows = truncated ? valid.slice(0, MAX_ROWS) : valid
+
+  return {
+    rows,
+    detection: { htsCol, labelCol, descCol, fileName, totalRows: rows.length, skippedInvalid, truncated },
+  }
 }
 
 export function parseFile(file: File): Promise<ParseResult> {

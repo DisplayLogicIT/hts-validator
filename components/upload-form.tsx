@@ -264,6 +264,16 @@ export function UploadForm() {
                 {detection.labelCol ? ` · Part# in "${detection.labelCol}"` : ''}
                 {detection.descCol  ? ` · Desc in "${detection.descCol}"` : ''}
               </p>
+              {detection.skippedInvalid > 0 && (
+                <p className="text-[10px] text-amber-600 mt-0.5">
+                  ⚠ {detection.skippedInvalid} rows skipped — HTS code not recognised (non-numeric or too short)
+                </p>
+              )}
+              {detection.truncated && (
+                <p className="text-[10px] text-amber-600 mt-0.5">
+                  ⚠ File exceeds 5,000 rows — showing first 5,000. Split the file to process the rest.
+                </p>
+              )}
             </div>
             {uploadState !== 'classifying' && (
               <button onClick={reset} title="Clear file" className="w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors shrink-0">

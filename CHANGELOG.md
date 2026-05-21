@@ -13,6 +13,19 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.3] — 2026-05-21
+### Added
+- **HTS code format validation** in file parser — rows where the HTS column  
+  does not contain 6–10 digits (after stripping `.` `-` spaces) are silently  
+  filtered out and counted as `skippedInvalid`; prevents ghost rows, placeholder  
+  text, and non-numeric values from inflating the batch
+- **5,000-row cap** — files exceeding the limit are truncated to the first 5,000  
+  valid rows with a `truncated` flag; prevents large files from hanging the app
+- **Upload warnings** — file info card shows amber notices if rows were skipped  
+  (invalid format) or the file was truncated
+
+---
+
 ## [1.4.2] — 2026-05-21
 ### Fixed
 - **Scan was always returning "No description"** — `bulkInsertResults` was storing  
