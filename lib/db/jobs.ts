@@ -140,7 +140,7 @@ async function getValidationResult(id: string): Promise<{ id: string; job_id: st
     .eq('id', id)
     .single()
   if (!data) return null
-  const org = data.validation_jobs as { org_id: string } | null
+  const org = data.validation_jobs as unknown as { org_id: string } | null
   return {
     id: data.id,
     job_id: data.job_id,

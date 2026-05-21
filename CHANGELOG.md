@@ -13,6 +13,16 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.1] — 2026-05-21
+### Fixed
+- TypeScript build error in `lib/db/jobs.ts` — `getValidationResult` joined  
+  `validation_jobs` data, inferred by Supabase JS as `{ org_id: any }[]` (array),  
+  could not be cast directly to `{ org_id: string } | null` (single object);  
+  added `unknown` intermediate cast (`as unknown as`) to satisfy the compiler.  
+  This was blocking every deploy since v1.3.0.
+
+---
+
 ## [1.4.0] — 2026-05-21
 ### Changed
 - **Scan now uses part description, not the code** — the initial upload already  
