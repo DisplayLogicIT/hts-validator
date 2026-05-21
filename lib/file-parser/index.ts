@@ -34,12 +34,21 @@ function isValidHtsCode(raw: string): boolean {
   return /^\d{6,10}$/.test(digits)
 }
 
+// Short keywords (≤2 chars) need word-boundary matching to avoid false positives
+// e.g. "hs" must not match inside "exchso" or "threshold"
+function matchesHtsKeyword(col: string, keyword: string): boolean {
+  if (keyword.length <= 2) {
+    return new RegExp(`(?:^|[^a-z0-9])${keyword}(?:[^a-z0-9]|$)`).test(col)
+  }
+  return col.includes(keyword)
+}
+
 export function detectColumns(headers: string[], sample: Record<string, string>[] = []): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
   const h = headers.map((s) => s.toLowerCase().trim())
 
   // Collect every column that matches any HTS keyword, with keyword rank (lower = higher priority)
   const candidates = h.reduce<{ idx: number; rank: number }[]>((acc, col, idx) => {
-    const rank = HTS_KEYWORDS.findIndex((k) => col.includes(k))
+    const rank = HTS_KEYWORDS.findIndex((k) => matchesHtsKeyword(col, k))
     if (rank !== -1) acc.push({ idx, rank })
     return acc
   }, [])
@@ -55,6 +64,17 @@ export function detectColumns(headers: string[], sample: Record<string, string>[
     // Most filled first; break ties by keyword rank (lower = higher priority keyword)
     ranked.sort((a, b) => b.filled - a.filled || a.rank - b.rank)
     htsIdx = ranked[0].idx
+  } else {
+    // No keyword match — find the column whose values most resemble HTS codes
+    const slice = sample.slice(0, 50)
+    if (slice.length > 0) {
+      const scores = headers.map((col, idx) => ({
+        idx,
+        score: slice.filter((row) => isValidHtsCode(String(row[col] ?? '').trim())).length,
+      }))
+      scores.sort((a, b) => b.score - a.score)
+      if (scores[0].score > 0) htsIdx = scores[0].idx
+    }
   }
 
   const labelIdxFound = h.findIndex((c, i) => i !== htsIdx && LABEL_KEYWORDS.some((k) => c.includes(k)))

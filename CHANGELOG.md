@@ -13,6 +13,17 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.4] — 2026-05-21
+### Fixed
+- **False-positive HTS column detection** — short keyword `"hs"` was matching  
+  inside unrelated column names (e.g. `EXCHSO_FLAT` contains `hs`). Added  
+  word-boundary matching for keywords ≤ 2 chars so only whole-word matches count.
+- **Content-based column fallback** — if no column name matches any HTS keyword,  
+  the parser now scores each column by how many of its values look like valid HTS  
+  codes (6–10 digits) and picks the best match automatically.
+
+---
+
 ## [1.4.3] — 2026-05-21
 ### Added
 - **HTS code format validation** in file parser — rows where the HTS column  
