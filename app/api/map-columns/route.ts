@@ -1,8 +1,6 @@
 import { auth } from '@clerk/nextjs/server'
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
-
-const client = new Anthropic()
+import { createAnthropicClient } from '@/lib/llm'
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,6 +36,7 @@ Rules:
 Respond with ONLY valid JSON, no explanation, no markdown:
 {"htsCol": "exact header name", "labelCol": "exact header name or null", "descCol": "exact header name or null"}`
 
+    const client = createAnthropicClient()
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 256,
