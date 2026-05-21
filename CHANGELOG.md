@@ -13,6 +13,18 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.0] — 2026-05-21
+### Added
+- **Settings page** — `/dashboard/settings` with Account (Clerk user info),  
+  API & Integrations (placeholder), and Notifications (placeholder toggles) sections
+- **Settings nav item** — gear icon link added to sidebar
+
+### Fixed
+- Validated / Unvalidated pages were capped at 1,000 rows (Supabase JS client  
+  default); raised `listResultsGroupedByJob` limit to 10,000
+
+---
+
 ## [1.0.2] — 2026-05-21
 ### Fixed
 - Surface real Supabase error message instead of generic "Query failed"  

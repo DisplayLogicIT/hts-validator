@@ -168,8 +168,8 @@ async function listResultsGroupedByJob(scopeId: string, status: 'valid' | 'not_f
 
   const jobIds = jobs.map((j) => j.id)
   const { data: results, error: resultsError } = status === 'valid'
-    ? await supabase.from('validation_results').select(RESULT_COLS).in('job_id', jobIds).not('hts_code', 'is', null)
-    : await supabase.from('validation_results').select(RESULT_COLS).in('job_id', jobIds).is('hts_code', null)
+    ? await supabase.from('validation_results').select(RESULT_COLS).in('job_id', jobIds).not('hts_code', 'is', null).limit(10000)
+    : await supabase.from('validation_results').select(RESULT_COLS).in('job_id', jobIds).is('hts_code', null).limit(10000)
   if (resultsError) throw resultsError
 
   const byJob = new Map<string, GroupedResultRow[]>()
