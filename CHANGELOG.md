@@ -13,6 +13,34 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.2.0] — 2026-05-21
+### Added
+- **History accordion** — each job row expands to show its full results table  
+  (input, HTS code, description, duty rate, valid/not-found status); results  
+  loaded lazily on first expand
+- **Delete from History** — trash icon on each job archives it (soft-delete);  
+  job disappears from History but is preserved in the archive
+- **Archive section in Settings** — shows all archived jobs with created/archived  
+  dates; each job has a **Restore** button (returns to History) and a  
+  **permanent delete** button
+- **Password-protected permanent delete** — permanent deletion from the archive  
+  requires the `ARCHIVE_DELETE_PASSWORD` env var to be set in Vercel; a modal  
+  prompts for the password before proceeding
+- `GET /api/jobs?archived=true` — returns archived jobs for the current scope
+- `GET /api/jobs/:id/results` — returns results for a single job (used by accordion)
+- `PATCH /api/jobs/:id` — extended to accept `{ archive: true }` / `{ restore: true }`
+- `DELETE /api/jobs/:id` — permanent delete; server-side password check
+
+### Changed
+- `listJobs()` now filters out archived jobs (`archived_at IS NULL`)
+- History page converted from flat table to accordion layout
+
+### DB
+- `validation_jobs`: added `archived_at TIMESTAMPTZ DEFAULT NULL` column  
+  (migration applied to project `yytjmkcxgardicwwlwtx` 2026-05-21)
+
+---
+
 ## [1.1.1] — 2026-05-21
 ### Fixed
 - TypeScript build error in `/api/debug` — `.catch()` does not exist on  

@@ -12,6 +12,7 @@ export interface Job {
   rows_done: number
   input_query: string | null
   created_at: string
+  archived_at: string | null
 }
 
 export interface JobCreate {
@@ -86,11 +87,61 @@ async function listJobs(scopeId: string): Promise<Job[]> {
   const supabase = createSupabaseAdminClient()
   const { data, error } = await supabase
     .from('validation_jobs')
-    .select('id, type, status, file_name, row_count, rows_done, input_query, created_at')
+    .select('id, type, status, file_name, row_count, rows_done, input_query, created_at, archived_at')
     .eq('org_id', scopeId)
+    .is('archived_at', null)
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []) as Job[]
+}
+
+async function listArchivedJobs(scopeId: string): Promise<Job[]> {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('validation_jobs')
+    .select('id, type, status, file_name, row_count, rows_done, input_query, created_at, archived_at')
+    .eq('org_id', scopeId)
+    .not('archived_at', 'is', null)
+    .order('archived_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Job[]
+}
+
+async function archiveJob(id: string): Promise<void> {
+  const supabase = createSupabaseAdminClient()
+  const { error } = await supabase
+    .from('validation_jobs')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+async function restoreJob(id: string): Promise<void> {
+  const supabase = createSupabaseAdminClient()
+  const { error } = await supabase
+    .from('validation_jobs')
+    .update({ archived_at: null })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+async function permanentDeleteJob(id: string): Promise<void> {
+  const supabase = createSupabaseAdminClient()
+  await supabase.from('validation_results').delete().eq('job_id', id)
+  const { error } = await supabase.from('validation_jobs').delete().eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+async function listJobResults(jobId: string): Promise<GroupedResultRow[]> {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('validation_results')
+    .select(RESULT_COLS)
+    .eq('job_id', jobId)
+    .order('row_index', { ascending: true })
+    .limit(5000)
+  if (error) throw new Error(error.message)
+  return (data ?? []) as GroupedResultRow[]
 }
 
 async function getJobOwnerId(id: string): Promise<string | null> {
@@ -186,9 +237,14 @@ async function listResultsGroupedByJob(scopeId: string, status: 'valid' | 'not_f
 export const jobRepository = {
   createJob,
   listJobs,
+  listArchivedJobs,
   getJobOwnerId,
   patchJob,
+  archiveJob,
+  restoreJob,
+  permanentDeleteJob,
   createValidationResult,
   bulkInsertResults,
   listResultsGroupedByJob,
+  listJobResults,
 }

@@ -27,13 +27,16 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const { userId, orgId } = await auth()
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const scopeId = orgId ?? userId
-    const jobs = await jobRepository.listJobs(scopeId)
+    const archived = req.nextUrl.searchParams.get('archived') === 'true'
+    const jobs = archived
+      ? await jobRepository.listArchivedJobs(scopeId)
+      : await jobRepository.listJobs(scopeId)
     return NextResponse.json({ jobs })
   } catch (err) {
     console.error('GET /api/jobs:', err)
