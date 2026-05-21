@@ -13,6 +13,14 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.1] — 2026-05-21
+### Fixed
+- TypeScript build error in `/api/debug` — `.catch()` does not exist on  
+  `PostgrestBuilder`; replaced with `try/catch` so the build passes again.  
+  This bug was silently blocking every deploy since the debug route was added.
+
+---
+
 ## [1.1.0] — 2026-05-21
 ### Added
 - **Settings page** — `/dashboard/settings` with Account (Clerk user info),  
