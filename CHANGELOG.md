@@ -1,0 +1,131 @@
+# Changelog
+
+All notable changes to HTS Validator are documented here.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
+Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
+
+> **Rule:** every commit that changes behaviour must bump `package.json` version
+> and add an entry here before pushing.
+
+---
+
+## [Unreleased]
+
+---
+
+## [1.0.2] — 2026-05-21
+### Fixed
+- Surface real Supabase error message instead of generic "Query failed"  
+  (`PostgrestError` is not an `instanceof Error`; wrap with `new Error(error.message)`)
+- Applied migration 002 to the correct Supabase project (`yytjmkcxgardicwwlwtx`)  
+  and reloaded PostgREST schema cache — History page now loads correctly
+
+### Changed
+- `/api/debug` exposes `NEXT_PUBLIC_SUPABASE_URL` value (was boolean) to aid diagnosis
+
+---
+
+## [1.0.1] — 2026-05-20
+### Fixed
+- `throw error` on Supabase `PostgrestError` replaced with `throw new Error(error.message)`  
+  across `listJobs`, `patchJob`, and `bulkInsertResults` so real errors reach the client
+
+---
+
+## [1.0.0] — 2026-05-20
+### Added
+- **Save to History button** — validation results no longer auto-save; user clicks  
+  "Save to History" after reviewing results
+- `POST /api/jobs/save` route — creates job + bulk-inserts all `validation_results` in one request
+- `bulkInsertResults()` added to `jobRepository`
+- **Version badge** in sidebar — shows `vX.X.X` from `package.json`, baked at build time  
+  via `next.config.ts`; confirms deploy went through
+
+### Changed
+- `startValidation()` stripped of job creation and parts API calls — validation only
+- `package.json` version field is now the source of truth for the displayed version
+
+---
+
+## [0.9.0] — 2026-05-19
+### Fixed
+- Strip UTF-8 BOM from Supabase env vars before passing to `createClient`  
+  (pasted values with BOM caused `ByteString` 65279 errors on every request)
+- Detect most-populated HTS column instead of first HTS-named column  
+  (fixes files where HTS_CODE column exists but Schedule B column has the data)
+- Parsing spinner added so UI is not silent while xlsx.js reads large files
+
+---
+
+## [0.8.0] — 2026-05-19
+### Fixed
+- Rename `proxy.ts` → `middleware.ts` — Next.js only loads middleware from that exact filename;  
+  Clerk was silently skipped causing every API route to 500
+- Wrap `auth()` in try/catch across all API routes; return `{ error }` JSON instead of blank 500
+- Validated and Unvalidated pages pivot to read from `validation_results`  
+  (parts table migrations 003/005 not yet applied)
+
+### Added
+- `/api/results` route for validated/unvalidated data
+- `/api/debug` diagnostic endpoint
+
+---
+
+## [0.7.0] — 2026-05-19
+### Changed
+- Architectural deepening: extracted `lib/file-parser`, `lib/hts/usitc`, `lib/db/jobs`,  
+  `lib/concurrency`, `lib/llm` from god-components
+- In-memory read-through cache added to `lookupHtsCode` / `searchHts`
+- History, Validated, Unvalidated pages converted to client-side fetch (CDN-served shells)
+
+---
+
+## [0.6.0] — 2026-05-13
+### Added
+- Precision instrument design — gradient sidebar, frosted topbars, dot-grid background,  
+  active nav accent stripe
+- Job-grouped validated/unvalidated views with batch accordion
+- Claude Haiku "Research" button for unvalidated parts
+- Upload localStorage cache (survives navigation); clear button; loading skeletons
+- History counts: Valid / Not Found columns
+
+---
+
+## [0.5.0] — 2026-05-12
+### Changed
+- Replaced AI classification with direct USITC HTS code lookup  
+  (valid = exact match in USITC schedule; not found = code absent)
+- 20-worker parallel classification loop (was 8)
+
+### Added
+- Validated page, Unvalidated page, Parts catalog table
+- Weekly revalidation cron
+
+---
+
+## [0.4.0] — 2026-05-11
+### Added
+- Upload page with drag-and-drop XLSX/CSV support
+- Batch job processing with progress bar
+- History page listing all jobs
+- `validation_jobs` and `validation_results` DB tables (migration 001 + 002)
+
+---
+
+## [0.3.0] — 2026-05-08
+### Added
+- Dashboard sidebar layout (navy + white, IBM Plex font)
+- Lookup form result card redesign
+
+---
+
+## [0.2.0] — 2026-05-07
+### Fixed
+- Clerk middleware wiring (proxy.ts / middleware.ts iterations)
+
+---
+
+## [0.1.0] — 2026-05-06
+### Added
+- Initial release: single HTS code lookup via Claude agent + USITC API
+- Clerk auth, Supabase persistence, Vercel deployment
