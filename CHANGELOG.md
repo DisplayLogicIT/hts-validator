@@ -13,6 +13,29 @@ Versioning: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [1.5.0] — 2026-05-21
+### Added
+- **Universal document ingestion with AI column mapping** — upload flow now has  
+  an explicit Column Mapping step between file drop and validation.  
+  After reading the file the app auto-detects columns as a starting point, then  
+  shows three dropdowns (HTS Code, Part Number, Description) so the user can  
+  correct any mistakes. A **"Map with AI"** button sends the column headers and  
+  10 sample rows to Claude Haiku which returns the correct mapping automatically —  
+  works for any spreadsheet regardless of column naming conventions.
+- `POST /api/map-columns` — new route; calls Claude Haiku to identify HTS, label,  
+  and description columns from headers + sample data
+- `parseRaw()` + `applyMapping()` exported from `lib/file-parser` — separates  
+  file reading from column extraction so the mapping can be changed without  
+  re-reading the file
+- Preview table after mapping confirmation shows first 10 rows with the selected  
+  columns so the user can verify before running validation
+
+### Fixed
+- Download (.xlsx) now reliably includes Part Number and Description columns —  
+  previously they were missing whenever column detection guessed wrong
+
+---
+
 ## [1.4.4] — 2026-05-21
 ### Fixed
 - **False-positive HTS column detection** — short keyword `"hs"` was matching  

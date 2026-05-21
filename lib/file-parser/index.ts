@@ -6,6 +6,18 @@ export interface ParsedRow {
   csvDesc: string
 }
 
+export interface ColumnMapping {
+  htsCol: string
+  labelCol: string | null
+  descCol: string | null
+}
+
+export interface RawParseResult {
+  headers: string[]
+  rawData: Record<string, string>[]
+  fileName: string
+}
+
 export interface DetectionInfo {
   htsCol: string
   labelCol: string | null
@@ -23,7 +35,6 @@ export interface ParseResult {
 
 const MAX_ROWS = 5_000
 
-// schedule_b listed before generic 'hs' so the two-char suffix doesn't steal priority
 const HTS_KEYWORDS   = ['hts', 'tariff', 'harmonized', 'htsus', 'schedule_b', 'scheduleb', 'schedule b', 'hs']
 const LABEL_KEYWORDS = ['partnumber', 'part_number', 'part number', 'nsn', 'pn', 'p/n', 'item', 'name', 'product']
 const DESC_KEYWORDS  = ['descriptn', 'description', 'desc']
@@ -35,7 +46,6 @@ function isValidHtsCode(raw: string): boolean {
 }
 
 // Short keywords (≤2 chars) need word-boundary matching to avoid false positives
-// e.g. "hs" must not match inside "exchso" or "threshold"
 function matchesHtsKeyword(col: string, keyword: string): boolean {
   if (keyword.length <= 2) {
     return new RegExp(`(?:^|[^a-z0-9])${keyword}(?:[^a-z0-9]|$)`).test(col)
@@ -46,7 +56,6 @@ function matchesHtsKeyword(col: string, keyword: string): boolean {
 export function detectColumns(headers: string[], sample: Record<string, string>[] = []): { htsIdx: number; labelIdx: number | null; descIdx: number | null } {
   const h = headers.map((s) => s.toLowerCase().trim())
 
-  // Collect every column that matches any HTS keyword, with keyword rank (lower = higher priority)
   const candidates = h.reduce<{ idx: number; rank: number }[]>((acc, col, idx) => {
     const rank = HTS_KEYWORDS.findIndex((k) => matchesHtsKeyword(col, k))
     if (rank !== -1) acc.push({ idx, rank })
@@ -55,13 +64,11 @@ export function detectColumns(headers: string[], sample: Record<string, string>[
 
   let htsIdx = 0
   if (candidates.length > 0) {
-    // Count non-empty values in a sample to prefer the column that actually has data
     const slice = sample.slice(0, 200)
     const ranked = candidates.map((c) => ({
       ...c,
       filled: slice.filter((row) => String(row[headers[c.idx]] ?? '').trim().length > 0).length,
     }))
-    // Most filled first; break ties by keyword rank (lower = higher priority keyword)
     ranked.sort((a, b) => b.filled - a.filled || a.rank - b.rank)
     htsIdx = ranked[0].idx
   } else {
@@ -90,20 +97,22 @@ export function detectColumns(headers: string[], sample: Record<string, string>[
   }
 }
 
-function buildResult(data: Record<string, string>[], headers: string[], fileName: string): ParseResult {
-  if (data.length === 0) throw new Error('No rows found. Make sure the file has a header row and data rows.')
-  const { htsIdx, labelIdx, descIdx } = detectColumns(headers, data)
-  const htsCol   = headers[htsIdx]
-  const labelCol = labelIdx !== null ? headers[labelIdx] : null
-  const descCol  = descIdx  !== null ? headers[descIdx]  : null
+// Apply an explicit column mapping to raw data, with HTS validation and row cap
+export function applyMapping(raw: RawParseResult, mapping: ColumnMapping): ParseResult {
+  const { htsCol, labelCol, descCol } = mapping
+  const { headers, rawData, fileName } = raw
 
-  const mapped = data.map((row) => ({
+  if (!headers.includes(htsCol)) {
+    throw new Error(`Column "${htsCol}" not found in file.`)
+  }
+
+  const mapped = rawData.map((row) => ({
     htsCode: String(row[htsCol]   ?? '').trim(),
     label:   labelCol ? String(row[labelCol] ?? '').trim() : '',
     csvDesc: descCol  ? String(row[descCol]  ?? '').trim() : '',
   }))
 
-  const valid   = mapped.filter((r) => r.htsCode.length > 0 && isValidHtsCode(r.htsCode))
+  const valid = mapped.filter((r) => r.htsCode.length > 0 && isValidHtsCode(r.htsCode))
   const skippedInvalid = mapped.length - valid.length
 
   if (valid.length === 0) {
@@ -119,17 +128,15 @@ function buildResult(data: Record<string, string>[], headers: string[], fileName
   }
 }
 
-export function parseFile(file: File): Promise<ParseResult> {
+// Read a file to raw headers + data without any column detection
+async function readRaw(file: File): Promise<{ headers: string[]; rawData: Record<string, string>[] }> {
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (ext === 'csv') {
     return new Promise((resolve, reject) => {
       Papa.parse<Record<string, string>>(file, {
         header: true,
         skipEmptyLines: true,
-        complete: (result) => {
-          try { resolve(buildResult(result.data, result.meta.fields ?? [], file.name)) }
-          catch (err) { reject(err) }
-        },
+        complete: (result) => resolve({ headers: result.meta.fields ?? [], rawData: result.data }),
         error: (err) => reject(new Error(`CSV error: ${err.message}`)),
       })
     })
@@ -143,7 +150,7 @@ export function parseFile(file: File): Promise<ParseResult> {
           const wb   = XLSX.read(e.target?.result, { type: 'array' })
           const ws   = wb.Sheets[wb.SheetNames[0]]
           const data = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
-          resolve(buildResult(data, data.length > 0 ? Object.keys(data[0]) : [], file.name))
+          resolve({ headers: data.length > 0 ? Object.keys(data[0]) : [], rawData: data })
         } catch (err) {
           reject(new Error(`Could not read file: ${err instanceof Error ? err.message : String(err)}`))
         }
@@ -153,4 +160,22 @@ export function parseFile(file: File): Promise<ParseResult> {
     }),
     (err) => Promise.reject(new Error(`Parser failed to load: ${err instanceof Error ? err.message : String(err)}`)),
   )
+}
+
+export async function parseRaw(file: File): Promise<RawParseResult> {
+  if (file.size === 0) throw new Error('File is empty.')
+  const { headers, rawData } = await readRaw(file)
+  if (rawData.length === 0) throw new Error('No rows found. Make sure the file has a header row and data rows.')
+  return { headers, rawData, fileName: file.name }
+}
+
+// Convenience: auto-detect columns and apply — used for backward compat
+export async function parseFile(file: File): Promise<ParseResult> {
+  const raw = await parseRaw(file)
+  const { htsIdx, labelIdx, descIdx } = detectColumns(raw.headers, raw.rawData)
+  return applyMapping(raw, {
+    htsCol:   raw.headers[htsIdx],
+    labelCol: labelIdx !== null ? raw.headers[labelIdx] : null,
+    descCol:  descIdx  !== null ? raw.headers[descIdx]  : null,
+  })
 }
